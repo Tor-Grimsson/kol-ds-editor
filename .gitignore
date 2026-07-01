@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+.vite
+*.local
+.DS_Store
+
+# playwright-mcp test artifacts
+.playwright-mcp/
+
+# Agent context & local-only docs (init-scaffold / init-agent-context)
+LLM_RULES.md
+/docs/
+.claude/

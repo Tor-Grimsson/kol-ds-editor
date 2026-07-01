@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+/* Design-system tokens + base CSS — the published brand-neutral theme. */
+@import "@kolkrabbi/kol-theme";
+
+/* Brand layer — Kolkrabbi identity (hue ramps, brand-primary/secondary roles,
+ * accent rebind). Binds the neutral DS theme above to the Kolkrabbi brand. */
+@import "@kolkrabbi/kol-framework/kol-brand-color.css";
+
+/* Framework layer — page chrome / structural rules (inert without its markup). */
+@import "@kolkrabbi/kol-framework/kol-framework.css";
+
+/* Reserve scrollbar gutter so fullbleed canvases don't horizontal-scroll. */
+:root { scrollbar-gutter: stable; }
