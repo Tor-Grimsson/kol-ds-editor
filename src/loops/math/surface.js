@@ -316,6 +316,10 @@ function attractorRender(ctx, proj, u, p, traj) {
   if (p.fade) ctx.globalAlpha = 1
 }
 
+// Kind gates — surfaceRender-only vs attractorRender-only params (see draw()).
+const isSurf = (l) => (l.kind ?? 'surface') !== 'attractor'
+const isAtt = (l) => l.kind === 'attractor'
+
 export default {
   id: 'math-surface',
   label: 'Surface',
@@ -324,24 +328,24 @@ export default {
   duration: 12,
   params: [
     { key: 'kind', label: 'Kind', type: 'select', options: [{ value: 'surface', label: 'Surface' }, { value: 'attractor', label: 'Attractor' }], default: 'surface' },
-    { key: 'fn', label: 'Function', type: 'select', options: FN_OPTIONS.map(({ value, label }) => ({ value, label })), default: 'ripple' },
-    { key: 'attractor', label: 'Attractor', type: 'select', options: ATTRACTORS.map((a) => ({ value: a.id, label: a.label })), default: 'lorenz' },
-    { key: 'mode', label: 'Mode', type: 'select', options: [{ value: 'wire', label: 'Wire' }, { value: 'fill', label: 'Fill' }], default: 'wire' },
+    { key: 'fn', label: 'Function', type: 'select', options: FN_OPTIONS.map(({ value, label }) => ({ value, label })), default: 'ripple', when: isSurf },
+    { key: 'attractor', label: 'Attractor', type: 'select', options: ATTRACTORS.map((a) => ({ value: a.id, label: a.label })), default: 'lorenz', when: isAtt },
+    { key: 'mode', label: 'Mode', type: 'select', options: [{ value: 'wire', label: 'Wire' }, { value: 'fill', label: 'Fill' }], default: 'wire', when: isSurf },
     { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#050506' },
-    { key: 'low', label: 'Low', type: 'color', role: 'accent', default: '#1b2b4a' },
-    { key: 'high', label: 'High', type: 'color', role: 'fg', default: '#ffd23f' },
-    { key: 'stroke', label: 'Stroke', type: 'color', role: 'fg', default: '#9ec1ff' },
-    { key: 'res', label: 'Resolution', type: 'range', min: 12, max: 72, step: 2, default: 46, noRandom: true },
-    { key: 'domain', label: 'Domain', type: 'range', min: 1, max: 8, step: 0.2, default: 3.2 },
-    { key: 'height', label: 'Height', type: 'range', min: 0.1, max: 4, step: 0.1, default: 1 },
-    { key: 'contours', label: 'Contours', type: 'toggle', default: false },
+    { key: 'low', label: 'Low', type: 'color', role: 'accent', default: '#1b2b4a', when: isSurf },
+    { key: 'high', label: 'High', type: 'color', role: 'fg', default: '#ffd23f', when: isSurf },
+    { key: 'stroke', label: 'Stroke', type: 'color', role: 'fg', default: '#9ec1ff', when: (l) => isAtt(l) && !l.gradient },
+    { key: 'res', label: 'Resolution', type: 'range', min: 12, max: 72, step: 2, default: 46, noRandom: true, when: isSurf },
+    { key: 'domain', label: 'Domain', type: 'range', min: 1, max: 8, step: 0.2, default: 3.2, when: isSurf },
+    { key: 'height', label: 'Height', type: 'range', min: 0.1, max: 4, step: 0.1, default: 1, when: isSurf },
+    { key: 'contours', label: 'Contours', type: 'toggle', default: false, when: isSurf },
     { key: 'morph', label: 'Breathe', type: 'range', min: 0, max: 1, step: 0.01, default: 0 },
-    { key: 'ripple', label: 'Ripple', type: 'range', min: 0, max: 1, step: 0.01, default: 0 },
+    { key: 'ripple', label: 'Ripple', type: 'range', min: 0, max: 1, step: 0.01, default: 0, when: isSurf },
     { key: 'fade', label: 'Fade', type: 'range', min: 0, max: 1, step: 0.01, default: 0 },
-    { key: 'steps', label: 'Steps', type: 'range', min: 2000, max: 12000, step: 500, default: 6000, noRandom: true },
-    { key: 'weight', label: 'Weight', type: 'range', min: 0.3, max: 4, step: 0.1, default: 1.1 },
-    { key: 'gradient', label: 'Rainbow', type: 'toggle', default: false },
-    { key: 'spin', label: 'Spin · turns', type: 'range', min: 0, max: 3, step: 1, default: 1 },
+    { key: 'steps', label: 'Steps', type: 'range', min: 2000, max: 12000, step: 500, default: 6000, noRandom: true, when: isAtt },
+    { key: 'weight', label: 'Weight', type: 'range', min: 0.3, max: 4, step: 0.1, default: 1.1, when: (l) => isAtt(l) || (l.mode ?? 'wire') === 'wire' },
+    { key: 'gradient', label: 'Rainbow', type: 'toggle', default: false, when: isAtt },
+    { key: 'spin', label: 'Spin · turns', type: 'range', min: 0, max: 3, step: 1, default: 1, tab: 'anim', section: 'Motion' },
     { key: 'yaw', label: 'Yaw', type: 'range', min: 0, max: 360, step: 1, default: 325 },
     { key: 'pitch', label: 'Pitch', type: 'range', min: -80, max: 80, step: 1, default: 26 },
     { key: 'dist', label: 'Distance', type: 'range', min: 1.5, max: 6, step: 0.1, default: 3 },

@@ -68,26 +68,26 @@ export default {
   params: [
     { key: 'colA', label: 'Colour A', type: 'color', role: 'bg', default: '#000000' },
     { key: 'colB', label: 'Colour B', type: 'color', role: 'fg', default: '#ffffff' },
-    { key: 'combine', label: 'Combine', type: 'select', options: COMBINE_OPTIONS, default: 'xor' },
+    { key: 'combine', label: 'Combine', type: 'select', options: COMBINE_OPTIONS, default: 'xor', when: (l) => (l.g2On ?? true) || !!l.g3On },
     { key: 'hardness', label: 'Hardness', type: 'range', min: 0, max: 1, step: 0.01, default: 0.3 },
     { key: 'invert', label: 'Invert', type: 'toggle', default: false },
     // Grid A (always on — the base grid)
     { key: 'g1Type', label: 'Grid A', type: 'select', options: GRID_OPTIONS, default: 'lines' },
     { key: 'g1Freq', label: 'A · freq', type: 'range', min: 1, max: 30, step: 0.5, default: 6 },
-    { key: 'g1Angle', label: 'A · angle', type: 'range', min: 0, max: 180, step: 1, default: 0 },
-    { key: 'g1Cycles', label: 'A · drift', type: 'range', min: -4, max: 4, step: 1, default: 1, noRandom: true },
+    { key: 'g1Angle', label: 'A · angle', type: 'range', min: 0, max: 180, step: 1, default: 0, when: (l) => (l.g1Type ?? 'lines') === 'lines' },
+    { key: 'g1Cycles', label: 'A · drift', type: 'range', min: -4, max: 4, step: 1, default: 1, noRandom: true, tab: 'anim', section: 'Motion' },
     // Grid B
     { key: 'g2On', label: 'Grid B on', type: 'toggle', default: true },
-    { key: 'g2Type', label: 'Grid B', type: 'select', options: GRID_OPTIONS, default: 'lines' },
-    { key: 'g2Freq', label: 'B · freq', type: 'range', min: 1, max: 30, step: 0.5, default: 6 },
-    { key: 'g2Angle', label: 'B · angle', type: 'range', min: 0, max: 180, step: 1, default: 8 },
-    { key: 'g2Cycles', label: 'B · drift', type: 'range', min: -4, max: 4, step: 1, default: -1, noRandom: true },
+    { key: 'g2Type', label: 'Grid B', type: 'select', options: GRID_OPTIONS, default: 'lines', when: (l) => l.g2On ?? true },
+    { key: 'g2Freq', label: 'B · freq', type: 'range', min: 1, max: 30, step: 0.5, default: 6, when: (l) => l.g2On ?? true },
+    { key: 'g2Angle', label: 'B · angle', type: 'range', min: 0, max: 180, step: 1, default: 8, when: (l) => (l.g2On ?? true) && (l.g2Type ?? 'lines') === 'lines' },
+    { key: 'g2Cycles', label: 'B · drift', type: 'range', min: -4, max: 4, step: 1, default: -1, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => l.g2On ?? true },
     // Grid C
     { key: 'g3On', label: 'Grid C on', type: 'toggle', default: false },
-    { key: 'g3Type', label: 'Grid C', type: 'select', options: GRID_OPTIONS, default: 'concentric' },
-    { key: 'g3Freq', label: 'C · freq', type: 'range', min: 1, max: 30, step: 0.5, default: 4 },
-    { key: 'g3Angle', label: 'C · angle', type: 'range', min: 0, max: 180, step: 1, default: 0 },
-    { key: 'g3Cycles', label: 'C · drift', type: 'range', min: -4, max: 4, step: 1, default: 1, noRandom: true },
+    { key: 'g3Type', label: 'Grid C', type: 'select', options: GRID_OPTIONS, default: 'concentric', when: (l) => !!l.g3On },
+    { key: 'g3Freq', label: 'C · freq', type: 'range', min: 1, max: 30, step: 0.5, default: 4, when: (l) => !!l.g3On },
+    { key: 'g3Angle', label: 'C · angle', type: 'range', min: 0, max: 180, step: 1, default: 0, when: (l) => !!l.g3On && l.g3Type === 'lines' },
+    { key: 'g3Cycles', label: 'C · drift', type: 'range', min: -4, max: 4, step: 1, default: 1, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.g3On },
   ],
   draw(ctx, u, w, h, p) {
     const grids = [

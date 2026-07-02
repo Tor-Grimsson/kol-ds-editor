@@ -68,3 +68,36 @@ export const presetParams = (preset) => ({
   ...loopDefaults(loopById(preset.loop)),
   ...(preset.params || {}),
 })
+
+// ── Background toggle (Phase 6-C) ────────────────────────────────────────
+// A loop layer can render transparent by suppressing its bg-roled colour
+// param: the backdrop fill paints 'rgba(0,0,0,0)' — a no-op on a cleared
+// canvas. Only valid where bg is JUST a backdrop fill. Loops that feed the
+// bg colour into colour math (hexToRgb/mixHex pixel ramps — the field
+// family's colA + optic moiré) or fade a persistent buffer toward it
+// (spinner) are listed here and keep the toggle hidden. Engine (GL) loops
+// are excluded wholesale — their bg is shader-internal.
+const BG_MIX_IDS = new Set([
+  'plasma', 'swirl', 'checker-field', 'contour', 'rings-field', 'moire',
+  'gradient-field', 'stripes', 'interference',  // field: colA→colB pixel ramps
+  'optic-moire',                                // hexToRgb(colA) colour math
+  'math-spinner',                               // persistence fade fills bg
+])
+export const loopBgToggleable = (def) =>
+  !!def && !BG_MIX_IDS.has(def.id) && (
+    /* Scene-type GL engines opt in via `bgToggle` (alpha renderer + clear-
+     * alpha swap in the host); fullscreen-quad engines can't (shader paints
+     * every pixel). */
+    def.kind === 'engine'
+      ? !!def.bgToggle
+      : (def.params ?? []).some((p) => p.type === 'color' && p.role === 'bg')
+  )
+
+// Params for a draw call honoring `layer.bgOn` — returns `layer` untouched
+// unless suppression applies (callers identity-check to know they must
+// clear the canvas themselves, since the loop's bg fill no longer does).
+export const loopDrawParams = (def, layer) => {
+  if (layer.bgOn !== false || !loopBgToggleable(def)) return layer
+  const key = def.params.find((p) => p.type === 'color' && p.role === 'bg')?.key
+  return key ? { ...layer, [key]: 'rgba(0,0,0,0)' } : layer
+}

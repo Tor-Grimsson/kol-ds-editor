@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { Slider, Dropdown, Input, LabeledControl } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../state'
 import { ASPECTS } from '../../shell/aspects'
@@ -87,7 +88,12 @@ export default function CanvasInspector() {
 
 /* Number field that commits on blur / Enter (not per-keystroke) so typing
  * "1920" doesn't reshape the canvas at "1", "19", "192". */
+/* Controlled draft, committed on blur/Enter. (The old defaultValue+key trick
+ * fought the DS Input, which always sets `value` internally — React logged
+ * controlled/uncontrolled warnings on every render.) */
 function SizeField({ label, value, onCommit, num }) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => { setDraft(String(value)) }, [value])
   return (
     <div className="flex items-center gap-1.5 flex-1 min-w-0">
       <span
@@ -101,9 +107,9 @@ function SizeField({ label, value, onCommit, num }) {
           variant="ghost"
           size="sm"
           type="number"
-          defaultValue={value}
-          key={value}
-          onBlur={(e) => onCommit(num(e.target.value, value))}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={() => onCommit(num(draft, value))}
           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
         />
       </div>

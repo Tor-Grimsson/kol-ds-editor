@@ -28,7 +28,7 @@ export default class RibbonEngine {
   constructor(canvas, { autoLoop = false } = {}) {
     this.autoLoop = autoLoop
     this.canvas = canvas
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true })
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, alpha: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.setClearColor(new THREE.Color('#000000'), 1)
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ASPECTS } from './aspects'
+import { transport } from '../params/transport'
 
 /* Current viewport zoom factor — consumed by editing chrome (selection
  * handles, path nodes) to render at a screen-constant size by dividing
@@ -131,6 +132,10 @@ export default function Canvas({
   align = 'center',
   panEnabled = false,
   showGrid = true,
+  showRulers = true,
+  guides,
+  setGuides,
+  guidesInteractive = true,
   children,
 }) {
   const { ratio } = resolveAspect(aspect, customRatio)
@@ -158,7 +163,17 @@ export default function Canvas({
   )
 
   if (!panEnabled) return letterbox
-  return <PanZoomViewport showGrid={showGrid}>{letterbox}</PanZoomViewport>
+  return (
+    <PanZoomViewport
+      showGrid={showGrid}
+      showRulers={showRulers}
+      guides={guides}
+      setGuides={setGuides}
+      guidesInteractive={guidesInteractive}
+    >
+      {letterbox}
+    </PanZoomViewport>
+  )
 }
 
 const ZOOM_MIN = 0.1
@@ -177,6 +192,34 @@ function zoomAt(v, factor, sx, sy) {
   }
 }
 
+/* Live framerate for the fps chip, measured only while shown (RAF idles
+ * when off). Toggled by `f` alongside the zoom readout below. */
+function useFps(enabled) {
+  const [fps, setFps] = useState(0)
+  useEffect(() => {
+    if (!enabled) return
+    let raf, frames = 0, last = performance.now()
+    const loop = (now) => {
+      frames++
+      if (now - last >= 500) {
+        setFps(Math.round((frames * 1000) / (now - last)))
+        frames = 0
+        last = now
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [enabled])
+  return fps
+}
+
+function isTypingTarget(el) {
+  if (!el) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
+
 /**
  * PanZoomViewport — infinite-canvas viewport (pan + zoom).
  *
@@ -188,14 +231,24 @@ function zoomAt(v, factor, sx, sy) {
  * needs no zoom awareness. Pointer events on the transform layer disable
  * while Space is held so layer mousedowns don't fire mid-pan.
  */
-function PanZoomViewport({ children, showGrid = true }) {
+function PanZoomViewport({
+  children,
+  showGrid = true,
+  showRulers = true,
+  guides,
+  setGuides,
+  guidesInteractive = true,
+}) {
   const containerRef              = useRef(null)
   const [spaceHeld, setSpaceHeld] = useState(false)
+  /* Space tap = play/pause; Space+drag = pan. The ref records whether a
+   * pan drag consumed this Space press (set on pan mousedown). */
+  const spacePannedRef = useRef(false)
   const [dragging, setDragging]   = useState(false)
   const [view, setView]           = useState({ zoom: 1, x: 0, y: 0 })
-  const [smooth, setSmooth]       = useState(true)
   const dragStart                 = useRef(null)
-  const settle                    = useRef(null)
+  const [showFps, setShowFps]     = useState(false)
+  const fps                       = useFps(showFps)
 
   /* Space toggles pan mode; Cmd+0 / Cmd+= / Cmd+- drive zoom from the
    * keyboard (centered on the viewport). Skipped while typing in a field. */
@@ -206,6 +259,7 @@ function PanZoomViewport({ children, showGrid = true }) {
       if (isInputTarget(e.target)) return
       if (e.code === 'Space') {
         e.preventDefault()
+        if (!e.repeat) spacePannedRef.current = false
         setSpaceHeld(true)
         return
       }
@@ -229,6 +283,9 @@ function PanZoomViewport({ children, showGrid = true }) {
         setSpaceHeld(false)
         setDragging(false)
         dragStart.current = null
+        /* No pan happened → this was a tap: play/pause (the "ultimate ruler"
+         * transport binding; labs parity). */
+        if (!spacePannedRef.current) transport.toggle()
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -269,9 +326,6 @@ function PanZoomViewport({ children, showGrid = true }) {
       const rect = node.getBoundingClientRect()
       const sx = e.clientX - rect.left
       const sy = e.clientY - rect.top
-      setSmooth(false)
-      clearTimeout(settle.current)
-      settle.current = setTimeout(() => setSmooth(true), 140)
       if (e.ctrlKey || e.metaKey) {
         setView((v) => zoomAt(v, Math.exp(-e.deltaY * 0.0015), sx, sy))
       } else {
@@ -283,8 +337,7 @@ function PanZoomViewport({ children, showGrid = true }) {
   }, [])
 
   /* Zoom tool clicks arrive as kol:zoom-at events (client coords + factor)
-   * from CanvasArea — anchored zoom at the pointer, animated by the
-   * default smooth transition. */
+   * from CanvasArea — anchored zoom at the pointer. */
   useEffect(() => {
     const onZoomEvt = (e) => {
       const node = containerRef.current
@@ -297,9 +350,23 @@ function PanZoomViewport({ children, showGrid = true }) {
     return () => window.removeEventListener('kol:zoom-at', onZoomEvt)
   }, [])
 
+  /* `f` toggles the fps chip (measured only while shown). Guarded against
+   * typing targets so text fields don't flip it. */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'f' && e.key !== 'F') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (isTypingTarget(e.target)) return
+      setShowFps((v) => !v)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const onMouseDown = (e) => {
     if (!spaceHeld) return
     e.preventDefault()
+    spacePannedRef.current = true
     dragStart.current = { x: e.clientX - view.x, y: e.clientY - view.y }
     setDragging(true)
   }
@@ -319,12 +386,16 @@ function PanZoomViewport({ children, showGrid = true }) {
       style={cursor ? { cursor } : undefined}
       onMouseDown={onMouseDown}
     >
+      {/* No transition on the transform: editing chrome (selection wireframe,
+          path nodes) sizes itself by 1/zoom from React state, which updates
+          instantly — an eased CSS transform lags behind and makes the chrome
+          visibly pop ("selection-wireframe zoom jolt"). Instant zoom keeps
+          chrome, rulers, and stage in the same frame. */}
       <div
         className="absolute inset-0"
         style={{
           transform: `translate(${view.x}px, ${view.y}px) scale(${view.zoom})`,
           transformOrigin: '0 0',
-          transition: dragging || !smooth ? 'none' : 'transform 120ms ease-out',
           pointerEvents: spaceHeld ? 'none' : 'auto',
         }}
       >
@@ -339,24 +410,42 @@ function PanZoomViewport({ children, showGrid = true }) {
         <div className="relative w-full h-full">{children}</div>
       </div>
 
-      <CanvasRuler containerRef={containerRef} view={view} />
+      {/* Ruler guides — viewport-level so each line spans the whole visible
+          canvas area (readable against the rulers), under the rulers, above
+          the canvas content. */}
+      {guides && setGuides && (
+        <CanvasGuides
+          containerRef={containerRef}
+          view={view}
+          guides={guides}
+          setGuides={setGuides}
+          interactive={guidesInteractive && !spaceHeld}
+        />
+      )}
 
-      {/* Zoom readout — click to reset to 100% / centered. */}
-      <button
-        type="button"
-        onClick={() => setView({ zoom: 1, x: 0, y: 0 })}
-        className="absolute bottom-3 right-3 z-[3] px-2 py-1 rounded text-[11px] tabular-nums"
-        style={{
-          fontFamily: 'var(--kol-font-family-mono)',
-          background: 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 70%, transparent)',
-          color: 'var(--kol-fg-1, #F5F3EF)',
-          border: '1px solid color-mix(in srgb, #F5F3EF 18%, transparent)',
-          opacity: atRest ? 0.55 : 1,
-        }}
-        title="Reset zoom (⌘0)"
-      >
-        {Math.round(view.zoom * 100)}%
-      </button>
+      {showRulers && <CanvasRuler containerRef={containerRef} view={view} disabled={spaceHeld} />}
+
+      {/* Zoom % + fps — matching chips. Zoom (click resets to 100% /
+          centered) first, fps to its right, shown while `f` toggles it. */}
+      <div className="absolute bottom-3 right-3 z-[3] flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setView({ zoom: 1, x: 0, y: 0 })}
+          className="px-2 py-1 rounded border border-fg-08 bg-surface-secondary kol-mono-12 text-emphasis tabular-nums"
+          style={{ opacity: atRest && !showFps ? 0.55 : 1 }}
+          title="Reset zoom (⌘0)"
+        >
+          {Math.round(view.zoom * 100)}%
+        </button>
+        {showFps && (
+          <span
+            className="px-2 py-1 rounded border border-fg-08 bg-surface-secondary kol-mono-12 text-emphasis tabular-nums"
+            title="Framerate — press F to hide"
+          >
+            {fps} fps
+          </span>
+        )}
+      </div>
     </div>
     </CanvasZoomContext.Provider>
   )
@@ -383,16 +472,15 @@ function ticksFor(originScreen, pxPer, spanScreen, step) {
   return out
 }
 
-/**
- * CanvasRuler — top + left rulers in virtual-canvas px.
- *
- * Locates the tagged `[data-canvas-frame]` inside the viewport and reads its
- * on-screen rect — which already folds in the letterbox, fit-scale, and the
- * pan/zoom transform — so virtual-0 and the px-per-virtual scale come out
- * correct at any zoom with no separate math. Re-measures on every `view`
- * change and on container resize. Non-interactive (pointer-events: none).
- */
-function CanvasRuler({ containerRef, view }) {
+/* Frame geometry inside the viewport — locates the tagged
+ * `[data-canvas-frame]` and reads its on-screen rect (which already folds in
+ * the letterbox, fit-scale, and the pan/zoom transform) relative to the
+ * container, so `screen = left/top + virtual * pxPer` holds at any zoom with
+ * no separate math. `vh` is the frame's height in virtual px (for clamping
+ * horizontal guides). Re-measures on every `view` change and on container
+ * resize. Shared by CanvasRuler and CanvasGuides so ruler labels and guide
+ * lines can never disagree. */
+function useFrameGeom(containerRef, view) {
   const [geom, setGeom] = useState(null)
 
   const measure = useCallback(() => {
@@ -402,16 +490,45 @@ function CanvasRuler({ containerRef, view }) {
     const crect = el.getBoundingClientRect()
     if (!frame || crect.width === 0) { setGeom(null); return }
     const frect = frame.getBoundingClientRect()
+    const pxPer = frect.width / CANVAS_VIRTUAL_W
     setGeom({
       left:  frect.left - crect.left,
       top:   frect.top  - crect.top,
-      pxPer: frect.width / CANVAS_VIRTUAL_W,
+      pxPer,
+      vh:    pxPer > 0 ? frect.height / pxPer : 0,
       cw:    crect.width,
       ch:    crect.height,
     })
   }, [containerRef])
 
-  useLayoutEffect(() => { measure() }, [measure, view])
+  /* Smooth zoom (⌘±/⌘0/zoom-tool) animates the transform layer via a CSS
+   * transition, so a single measure at view-change time reads the PRE-
+   * animation rect and the labels lag the whole tween. Re-measure per
+   * animation frame until the frame rect stops moving (2 stable frames);
+   * wheel/pinch zooms (transition: none) settle immediately, costing only
+   * a couple of no-op frames. */
+  useLayoutEffect(() => {
+    measure()
+    let raf
+    let prevKey
+    let stable = 0
+    const tick = () => {
+      const frame = containerRef.current?.querySelector('[data-canvas-frame]')
+      if (!frame) return
+      const r = frame.getBoundingClientRect()
+      const key = `${r.left}|${r.top}|${r.width}`
+      if (key !== prevKey) {
+        prevKey = key
+        stable = 0
+        measure()
+      } else if (++stable >= 2) {
+        return
+      }
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [measure, view, containerRef])
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
@@ -420,21 +537,49 @@ function CanvasRuler({ containerRef, view }) {
     return () => ro.disconnect()
   }, [measure, containerRef])
 
+  return geom
+}
+
+/**
+ * CanvasRuler — top + left rulers in virtual-canvas px, mapped through the
+ * measured frame geometry (see useFrameGeom).
+ *
+ * Dragging off a ruler starts a new guide: the ruler only ANNOUNCES the
+ * gesture via a `kol:guide-drag-start` CustomEvent (same idiom as
+ * kol:zoom-at) — CanvasGuides owns the guide drag; the positions live in
+ * compose state. Canvases without a guides layer no-op. `disabled`
+ * (Space-held pan) lets the pointerdown bubble to the pan handler instead.
+ */
+function CanvasRuler({ containerRef, view, disabled = false }) {
+  const geom = useFrameGeom(containerRef, view)
+
+  const startGuideDrag = (axis) => (e) => {
+    if (disabled || e.button !== 0) return
+    e.preventDefault()
+    window.dispatchEvent(new CustomEvent('kol:guide-drag-start', {
+      detail: { axis, clientX: e.clientX, clientY: e.clientY },
+    }))
+  }
+
   if (!geom || geom.pxPer <= 0) return null
   const step   = niceStep(geom.pxPer)
   const hTicks = ticksFor(geom.left, geom.pxPer, geom.cw, step)
   const vTicks = ticksFor(geom.top,  geom.pxPer, geom.ch, step)
 
-  const tickColor   = 'color-mix(in srgb, #F5F3EF 45%, transparent)'
-  const textColor   = 'color-mix(in srgb, #F5F3EF 60%, transparent)'
-  const barBg       = 'color-mix(in srgb, #0E0E11 82%, transparent)'
-  const borderColor = 'color-mix(in srgb, #F5F3EF 24%, transparent)'
+  /* Light ruler variant — light bar, dark ticks/labels. */
+  /* Mid-grey bar trial (review) — dark ink at higher mixes so ticks and
+   * labels stay legible on #666. */
+  const tickColor   = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 70%, transparent)'
+  const textColor   = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 88%, transparent)'
+  const barBg       = '#666666'
+  const borderColor = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 35%, transparent)'
   const labelStyle  = { fontFamily: 'var(--kol-font-family-mono)', fontSize: 9 }
 
   return (
     <>
       <svg width="100%" height={RULER}
-        style={{ position: 'absolute', top: 0, left: 0, zIndex: 4, pointerEvents: 'none' }}>
+        onPointerDown={startGuideDrag('h')}
+        style={{ position: 'absolute', top: 0, left: 0, zIndex: 4, cursor: 'row-resize' }}>
         <rect x={0} y={0} width="100%" height={RULER} fill={barBg} />
         {hTicks.map(({ v, s }) => (
           <g key={v}>
@@ -445,7 +590,8 @@ function CanvasRuler({ containerRef, view }) {
         <line x1={0} y1={RULER - 0.5} x2="100%" y2={RULER - 0.5} stroke={borderColor} strokeWidth={1} />
       </svg>
       <svg width={RULER} height="100%"
-        style={{ position: 'absolute', top: 0, left: 0, zIndex: 4, pointerEvents: 'none' }}>
+        onPointerDown={startGuideDrag('v')}
+        style={{ position: 'absolute', top: 0, left: 0, zIndex: 4, cursor: 'col-resize' }}>
         <rect x={0} y={0} width={RULER} height="100%" fill={barBg} />
         {vTicks.map(({ v, s }) => (
           <g key={v}>
@@ -458,5 +604,179 @@ function CanvasRuler({ containerRef, view }) {
       </svg>
       <div style={{ position: 'absolute', top: 0, left: 0, width: RULER, height: RULER, background: barBg, borderRight: `1px solid ${borderColor}`, borderBottom: `1px solid ${borderColor}`, zIndex: 4, pointerEvents: 'none' }} />
     </>
+  )
+}
+
+/* A ruler guide — 1px accent line spanning the full viewport (Figma
+ * behavior: guides read against the rulers, not just the frame). Pointer
+ * events live on a slop wrapper around the line so the grab zone stays
+ * ~5 px; everything is screen px at the viewport level, so no zoom
+ * compensation is needed. */
+function GuideLine({ axis, screenPos, interactive, onGrab }) {
+  const slop = 5
+  const h = axis === 'h'
+  return (
+    <div
+      onPointerDown={interactive ? onGrab : undefined}
+      /* Stop the compat mousedown from reaching handlers underneath (pan /
+       * click-away) in browsers that fire it despite the canceled
+       * pointerdown. */
+      onMouseDown={interactive ? (e) => e.stopPropagation() : undefined}
+      style={{
+        position: 'absolute',
+        ...(h
+          ? { left: 0, top: screenPos - slop, width: '100%', height: slop * 2 + 1, cursor: 'row-resize' }
+          : { left: screenPos - slop, top: 0, width: slop * 2 + 1, height: '100%', cursor: 'col-resize' }),
+        pointerEvents: interactive ? 'auto' : 'none',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          ...(h
+            ? { left: 0, top: slop, width: '100%', height: 1 }
+            : { left: slop, top: 0, width: 1, height: '100%' }),
+          background: 'var(--kol-accent-primary)',
+        }}
+      />
+    </div>
+  )
+}
+
+/**
+ * CanvasGuides — ruler guides rendered at the viewport level so each line
+ * spans the entire visible canvas area instead of clipping to the letterbox
+ * frame. Positions are stored in virtual canvas px (compose state, threaded
+ * down as props — the viewport is shell code and owns no guide state); the
+ * screen mapping is the same frame-rect geometry the rulers use:
+ * screen = frameLeft/Top + virtual * pxPer.
+ *
+ * Interaction:
+ *   • grab a line (±5px slop) to move it — row/col-resize cursors
+ *   • drag off a ruler to create (CanvasRuler announces the gesture via
+ *     the kol:guide-drag-start CustomEvent; this layer owns the drag)
+ *   • release at virtual pos < 0 (back over the source ruler, or past the
+ *     frame edge toward it) deletes instead of committing
+ *
+ * Drags use window-level POINTER events — the ruler cancels its pointerdown,
+ * which suppresses the whole compatibility mouse-event stream for the
+ * interaction, so mousemove/mouseup would never fire.
+ */
+function CanvasGuides({ containerRef, view, guides, setGuides, interactive }) {
+  const geom = useFrameGeom(containerRef, view)
+  /* Ref mirror so the drag listeners read fresh geometry without rebinding. */
+  const geomRef = useRef(null)
+  geomRef.current = geom
+  const [guideDrag, setGuideDrag] = useState(null) /* { axis:'h'|'v', index:number|null, pos:number } | null */
+
+  /* client coords → virtual canvas px, via the measured frame geometry. */
+  const toVirtual = useCallback((clientX, clientY) => {
+    const el = containerRef.current
+    const g = geomRef.current
+    if (!el || !g || g.pxPer <= 0) return { vx: 0, vy: 0 }
+    const crect = el.getBoundingClientRect()
+    return {
+      vx: (clientX - crect.left - g.left) / g.pxPer,
+      vy: (clientY - crect.top  - g.top)  / g.pxPer,
+    }
+  }, [containerRef])
+
+  /* A pointerdown on a ruler dispatches kol:guide-drag-start (see
+   * CanvasRuler); this opens a new-guide drag at the pointer. */
+  useEffect(() => {
+    const onStart = (e) => {
+      const { axis, clientX, clientY } = e.detail
+      const { vx, vy } = toVirtual(clientX, clientY)
+      setGuideDrag({ axis, index: null, pos: Math.round(axis === 'h' ? vy : vx) })
+    }
+    window.addEventListener('kol:guide-drag-start', onStart)
+    return () => window.removeEventListener('kol:guide-drag-start', onStart)
+  }, [toVirtual])
+
+  /* Window-level listeners while a guide drag is live. Commit on pointerup:
+   * append (new) or move (existing); pos < 0 deletes / discards. Positions
+   * clamp to the far canvas edge and round to whole virtual px. */
+  useEffect(() => {
+    if (!guideDrag) return
+    const posFrom = (e) => {
+      const { vx, vy } = toVirtual(e.clientX, e.clientY)
+      return Math.round(guideDrag.axis === 'h' ? vy : vx)
+    }
+    const onMove = (e) => setGuideDrag((d) => d && { ...d, pos: posFrom(e) })
+    const onUp = (e) => {
+      const pos = posFrom(e)
+      const { axis, index } = guideDrag
+      const max = axis === 'h' ? Math.round(geomRef.current?.vh ?? 0) : CANVAS_VIRTUAL_W
+      setGuides((g) => {
+        const arr = [...g[axis]]
+        if (pos < 0) {
+          if (index != null) arr.splice(index, 1)   /* dropped on the ruler → delete */
+        } else if (index == null) {
+          arr.push(Math.min(pos, max))
+        } else {
+          arr[index] = Math.min(pos, max)
+        }
+        return { ...g, [axis]: arr }
+      })
+      setGuideDrag(null)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+    }
+  }, [guideDrag, toVirtual, setGuides])
+
+  if (!geom || geom.pxPer <= 0) return null
+  const screenFor = (axis, pos) =>
+    axis === 'h' ? geom.top + pos * geom.pxPer : geom.left + pos * geom.pxPer
+  const canGrab = interactive && !guideDrag
+  const grab = (axis, index, pos) => (e) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    setGuideDrag({ axis, index, pos })
+  }
+
+  return (
+    /* z-[3]: under the rulers (zIndex 4), above the transform layer (canvas
+       content). pointer-events-none wrapper — only the slop zones re-enable. */
+    <div className="absolute inset-0 pointer-events-none z-[3]">
+      {guides.h.map((y, i) => (
+        guideDrag?.axis === 'h' && guideDrag.index === i ? null : (
+          <GuideLine
+            key={`gh-${i}`} axis="h" screenPos={screenFor('h', y)}
+            interactive={canGrab} onGrab={grab('h', i, y)}
+          />
+        )
+      ))}
+      {guides.v.map((x, i) => (
+        guideDrag?.axis === 'v' && guideDrag.index === i ? null : (
+          <GuideLine
+            key={`gv-${i}`} axis="v" screenPos={screenFor('v', x)}
+            interactive={canGrab} onGrab={grab('v', i, x)}
+          />
+        )
+      ))}
+      {guideDrag && (
+        <>
+          <GuideLine
+            axis={guideDrag.axis}
+            screenPos={screenFor(guideDrag.axis, guideDrag.pos)}
+            interactive={false}
+          />
+          {/* Full-viewport cursor shield — keeps the row/col-resize cursor
+              while the pointer roams outside the dragged line's slop zone. */}
+          <div
+            className="absolute inset-0"
+            style={{
+              cursor: guideDrag.axis === 'h' ? 'row-resize' : 'col-resize',
+              pointerEvents: 'auto',
+            }}
+          />
+        </>
+      )}
+    </div>
   )
 }

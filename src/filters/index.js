@@ -29,6 +29,8 @@ import scanline from './scanline.js'
 import dither from './dither.js'
 import { RADAR_FX } from './fxRadar.js'
 import ascii from './fxAscii.js'
+import halftoneDither from './fxHalftoneDither.js'
+import bitmap from './fxBitmap.js'
 import { EFFECTS_FX } from './fxEffects.js'
 import { GL_FILTERS } from './gl/catalog.js'
 
@@ -36,8 +38,9 @@ export const FILTERS = [
   glass, scanline, dither,
   /* Radar canvas FX — labs radar/hooks/useCanvasFx.js (radar + live postfx chain) */
   ...RADAR_FX,
-  /* Radar ASCII — labs radar/effects/asciiEngine.js */
-  ascii,
+  /* HALFTONE trio — labs radar Dither/ASCII (+ shared sweep rig, sweeps.js)
+     and optic Bitmap (photo-luma halftone field) */
+  ascii, halftoneDither, bitmap,
   /* Effects canvas tier — labs pages/effects engine/canvasEffects.js over lib/imagefilters.js */
   ...EFFECTS_FX,
   /* GL engine filters — synths / distortion / lens (labs radar); lazy engines */

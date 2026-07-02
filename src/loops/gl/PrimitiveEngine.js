@@ -33,7 +33,7 @@ export default class PrimitiveEngine {
   constructor(canvas, { autoLoop = false } = {}) {
     this.canvas = canvas
     this.autoLoop = autoLoop
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true })
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, alpha: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     this.renderer.setClearColor(new THREE.Color(BG), 1)
 
@@ -428,7 +428,6 @@ export default class PrimitiveEngine {
     this.wireGeom.dispose()
     this.axes.geometry.dispose()
     this.axes.material.dispose()
-    this.spot.dispose()
     this.envTex?.dispose()
     this.pmrem.dispose()
     this.renderer.dispose()

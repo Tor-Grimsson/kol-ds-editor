@@ -52,8 +52,8 @@ export function SwatchesBody({ onPick }) {
   const swatches = useMemo(() => {
     if (palette === 'ac') {
       const fg    = FG_STOPS.map((s) => resolveCssVar(`--kol-fg-${s}`))
-      const red   = RED_STOPS.map((s) => resolveCssVar(`--brand-red-${s}`))
-      const cream = CREAM_STOPS.map((s) => resolveCssVar(`--cream-${s}`))
+      const red   = RED_STOPS.map((s) => resolveCssVar(`--kol-color-red-${s}`))
+      const cream = CREAM_STOPS.map((s) => resolveCssVar(`--kol-color-cream-${s}`))
       const grey  = GREY_STOPS.map((s) => resolveCssVar(`--grey-${s}`))
       return [...fg, ...red, ...cream, ...grey, '#FFFFFF', '#000000'].filter(Boolean)
     }

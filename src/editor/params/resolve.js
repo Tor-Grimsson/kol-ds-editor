@@ -29,10 +29,10 @@ export function hasBindings(layer) {
   return false
 }
 
-export function resolveValue(value, ctx) {
+export function resolveValue(value, ctx, layer) {
   if (!isBinding(value)) return value
   if (value.bind === 'track') return resolveTrack(value.keys, ctx?.t ?? 0)
-  if (value.bind === 'mod')   return resolveMod(value, ctx)
+  if (value.bind === 'mod')   return resolveMod(value, ctx, layer)
   return undefined
 }
 
@@ -41,7 +41,7 @@ export function resolveValue(value, ctx) {
 export function resolveLayer(layer, ctx) {
   if (!hasBindings(layer)) return layer
   const out = { ...layer }
-  for (const k in layer) if (isBinding(layer[k])) out[k] = resolveValue(layer[k], ctx)
+  for (const k in layer) if (isBinding(layer[k])) out[k] = resolveValue(layer[k], ctx, layer)
   return out
 }
 
@@ -88,9 +88,23 @@ function lerpValue(a, b, k) {
   return a
 }
 
-function resolveMod(binding, ctx) {
-  const raw = sampleSource(binding.source, ctx)          /* 0..1 */
-  const range = binding.transform?.range
+/* Per-binding smoothing state — EMA keyed on the binding OBJECT (bindings
+ * persist in layer state until rewritten, so identity is the natural key;
+ * a rewrite resets the smoother, which is correct). */
+const smoothState = new WeakMap()
+
+function resolveMod(binding, ctx, layer) {
+  const tr = binding.transform
+  let raw = sampleSource(binding.source, ctx, { transform: tr, layer })   /* 0..1 */
+  if (tr?.invert) raw = 1 - raw
+  /* smooth 0..1 → EMA follow factor (0 = raw, 0.95 = heavy lag). */
+  const sm = tr?.smooth
+  if (sm > 0) {
+    const prev = smoothState.get(binding)
+    raw = prev == null ? raw : prev + (raw - prev) * (1 - Math.min(0.95, sm))
+    smoothState.set(binding, raw)
+  }
+  const range = tr?.range
   if (range) return range[0] + (range[1] - range[0]) * raw
   return raw
 }

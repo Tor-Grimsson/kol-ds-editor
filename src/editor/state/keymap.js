@@ -56,11 +56,19 @@ export const SHORTCUTS = [
   { id: 'paint-clear',   combo: 'N',       label: 'Clear focused paint (none)',            section: 'Color' },
   { id: 'paint-clear',   combo: '/',       label: 'Clear focused paint (none)',            section: 'Color', hidden: true },
 
+  /* Layer opacity — digits are handled bespoke in CanvasArea (a combo can't
+   * express ranges or the double-0 chord); documented here for the cheat
+   * sheet. */
+  { id: 'opacity-digits', combo: '1–9',   label: 'Layer opacity 10–90%',    section: 'Layer', passive: true },
+  { id: 'opacity-full',   combo: '0',     label: 'Layer opacity 100%',      section: 'Layer', passive: true },
+  { id: 'opacity-zero',   combo: '00',    label: 'Layer opacity 0%',        section: 'Layer', passive: true },
+
   /* View */
   { id: 'show-shortcuts', combo: 'S',     label: 'Show shortcuts',          section: 'View' },
-  { id: 'pan',            combo: 'Space', label: 'Hold + drag to pan',      section: 'View', passive: true },
-  /* Handled inside TransportBar (window keydown, input-guarded) — documented
-   * here for the cheat sheet only. */
+  { id: 'toggle-rulers',  combo: 'Shift+R', label: 'Show / hide rulers',    section: 'View' },
+  { id: 'pan',            combo: 'Space', label: 'Play / pause · hold + drag to pan', section: 'View', passive: true },
+  /* Handled inside the canvas viewport (window keydown, input-guarded) —
+   * documented here for the cheat sheet only. */
   { id: 'fps',            combo: 'F',     label: 'Toggle fps readout',      section: 'View', passive: true },
 ]
 

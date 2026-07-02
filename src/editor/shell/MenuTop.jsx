@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MenuItem, MenuDropdownItem, MenuDropdownDivider, MenuDropdownNest } from '@kolkrabbi/kol-component'
-import { useModal } from '@kolkrabbi/kol-component'
+import { Input, useModal } from '@kolkrabbi/kol-component'
 import EditorIcon from '../icons/EditorIcon'
 import { ASPECTS } from './aspects'
 import { useComposeState } from '../compose/state'
@@ -10,6 +11,10 @@ import { usePatternState } from '../modes/pattern/state'
 import { useTypeState } from '../modes/type/state'
 import { getFeatures } from '../registry/features'
 import { useComposeFile } from '../compose/useComposeFile'
+import { findLayerDeep } from '../compose/helpers'
+import { FILTERS } from '../../filters'
+import { schemaDefaults } from '../params/schema'
+import { loopById } from '../../loops/registry'
 
 /**
  * MenuTop — top bar above the editor grid.
@@ -34,10 +39,10 @@ export default function MenuTop() {
   const {
     aspect, setAspect,
     view, setView,
-    layers,
+    layers, selectedId, updateLayer,
     canUndo, canRedo, undo, redo,
     clearLayers,
-    currentPresetId, currentPresetName,
+    currentPresetId, currentPresetName, setCurrentPresetName,
     loadPreset, loadPalette,
     snapEnabled, toggleSnap,
   } = useComposeState()
@@ -53,6 +58,32 @@ export default function MenuTop() {
 
   /* Save / save-as / export shared with the rail EditorFooter. */
   const { onSave, onSaveAs, onExportSvg, onExportPng } = useComposeFile()
+
+  /* Frame title — click-to-edit inline. Enter/blur commit, Escape cancels
+   * (unmount doesn't re-fire the React blur handler). */
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft]     = useState('')
+  const startTitleEdit = () => { setTitleDraft(currentPresetName ?? ''); setEditingTitle(true) }
+  const commitTitle    = () => { setEditingTitle(false); setCurrentPresetName(titleDraft.trim() || null) }
+
+  /* Effects menu (Phase 7) — apply a filter to the selected layer and jump
+   * to the Effects tab. Engine (GL) filters need an image source: photo
+   * layers get the full catalog, other positioned layers the canvas set;
+   * engine (GL) loops can't host effects yet (no GL source path). */
+  const fxLayer = selectedId && selectedId !== 'canvas' ? findLayerDeep(layers, selectedId) : null
+  const fxEngineLoop = fxLayer?.type === 'loop' && loopById(fxLayer.loopId)?.kind === 'engine'
+  const fxTarget = fxLayer && !fxEngineLoop && ['shape', 'text', 'pattern', 'path', 'loop', 'photo'].includes(fxLayer.type) ? fxLayer : null
+  const fxOptions = fxTarget
+    ? FILTERS.filter((f) => fxTarget.type === 'photo' || f.kind !== 'engine')
+    : []
+  const applyEffect = (f) => {
+    if (!fxTarget) return
+    updateLayer(fxTarget.id, { filterId: f.id, ...schemaDefaults(f.params) })
+    window.dispatchEvent(new CustomEvent('kol:open-effects'))
+  }
+  const clearEffect = () => {
+    if (fxTarget) updateLayer(fxTarget.id, { filterId: null })
+  }
 
   const confirmReplaceIfUnsaved = async () => {
     if (layers.length === 0) return true
@@ -80,11 +111,61 @@ export default function MenuTop() {
 
   return (
     <div className="kol-editor-topbar flex items-center gap-3 px-4 h-12 border-b border-fg-08">
-      <span className="kol-helper-12 text-emphasis truncate">
-        {currentPresetName || 'Untitled'}
-      </span>
+      {editingTitle ? (
+        <Input
+          variant="ghost"
+          size="sm"
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={commitTitle}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commitTitle()
+            else if (e.key === 'Escape') setEditingTitle(false)
+          }}
+          autoFocus
+          placeholder="Untitled"
+          width="220px"
+          inputClassName="kol-helper-12 text-emphasis"
+        />
+      ) : (
+        <span
+          className="kol-helper-12 text-emphasis truncate cursor-text"
+          onClick={startTitleEdit}
+          title="Rename"
+        >
+          {currentPresetName || 'Untitled'}
+        </span>
+      )}
       <div className="flex items-center gap-1 ml-auto">
-        <MenuItem label="Mode">
+        {/* panelClassName z-[1000]: MenuItem panels opt out of .kol-popover
+            chrome (panel={false}) and get NO z-index — the canvas rulers
+            (z-index 4, positioned) would paint over them. Match the
+            .kol-popover token value. */}
+        <MenuItem label="Effects" panelClassName="z-[1000]" panelStyle={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          <div className="py-1 w-[220px]">
+            {!fxTarget ? (
+              <div className="kol-helper-10 text-subtle px-3 py-1">Select a layer first</div>
+            ) : (
+              <>
+                <MenuDropdownItem onClick={clearEffect} disabled={!fxTarget.filterId}>
+                  None
+                </MenuDropdownItem>
+                <MenuDropdownDivider />
+                {fxOptions.map((f) => (
+                  <MenuDropdownItem
+                    key={f.id}
+                    onClick={() => applyEffect(f)}
+                    shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
+                  >
+                    {f.label}
+                  </MenuDropdownItem>
+                ))}
+              </>
+            )}
+          </div>
+        </MenuItem>
+
+        <MenuItem label="Mode" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
             {modes.map((m) => (
               <MenuDropdownItem
@@ -98,7 +179,7 @@ export default function MenuTop() {
           </div>
         </MenuItem>
 
-        <MenuItem label="File">
+        <MenuItem label="File" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
             <MenuDropdownItem onClick={onSave}>
               {currentPresetId ? 'Save' : 'Save…'}
@@ -129,7 +210,7 @@ export default function MenuTop() {
           </div>
         </MenuItem>
 
-        <MenuItem label="Canvas">
+        <MenuItem label="Canvas" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
             <MenuDropdownNest label="Aspect">
               {ASPECT_OPTIONS.map((opt) => (
@@ -159,7 +240,7 @@ export default function MenuTop() {
           </div>
         </MenuItem>
 
-        <MenuItem label="Templates" align="end" panelStyle={{ maxHeight: '70vh', overflowY: 'auto' }}>
+        <MenuItem label="Templates" align="end" panelClassName="z-[1000]" panelStyle={{ maxHeight: '70vh', overflowY: 'auto' }}>
           <div className="py-1 w-[220px]">
             <MenuDropdownNest label={`Starters · ${STARTERS.length}`}>
               {STARTERS.map((s) => (

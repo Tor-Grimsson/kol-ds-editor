@@ -9,11 +9,12 @@ import { rowLabelForLayer } from './labels'
 /**
  * Layer stack — left rail of the editor.
  *
- * Z-stacked render elements with HTML5 drag-to-reorder and a per-row
- * chevron that expands a "blending" sub-panel (visibility + opacity +
- * blend mode). Compact mode keeps the row tight; expanded gives quick
- * access to the per-layer toggles without round-tripping through the
- * inspector. Frame-level config (aspect) lives in the topbar Canvas menu.
+ * Z-stacked render elements with HTML5 drag-to-reorder. Row anatomy is
+ * [type icon] [name] ... [eye] [lock] — the toggles are hover-revealed,
+ * always visible when off/locked. Double-click a name to rename inline
+ * (stored on `layer.name`, cleared by emptying the input). Group rows
+ * collapse via the leading chevron; children indent one icon slot.
+ * Frame-level config (aspect) lives in the topbar Canvas menu.
  */
 
 /* Layer-type icon names — resolved by `EditorIcon` against
@@ -27,9 +28,11 @@ const TYPE_ICONS = {
   text:       'layer-text',
   group:      'layer-group',
   loop:       'layer-loop',
+  kinetic:    'layer-kinetic',
 }
 
-const BLEND_MODES = [
+/* Exported — the inspector's Blend dropdown shares this list. */
+export const BLEND_MODES = [
   { value: 'normal',     label: 'Normal' },
   { value: 'multiply',   label: 'Multiply' },
   { value: 'screen',     label: 'Screen' },
@@ -41,7 +44,7 @@ const BLEND_MODES = [
 function LayerRow({
   layer, active, palette,
   groupCollapsed, onToggleGroup,
-  onSelect, onShiftSelect, onToggleVisibility, onToggleLock,
+  onSelect, onShiftSelect, onToggleVisibility, onToggleLock, onRename,
   draggedId, dropTargetId, dropPosition,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }) {
@@ -52,6 +55,23 @@ function LayerRow({
   const isDropBelow = dropTargetId === layer.id && dropPosition === 'below'
 
   const selectHandlers = useShiftClickHandlers(onSelect, onShiftSelect)
+
+  /* Inline rename — double-click the name to edit. Enter/blur commits
+   * (via updateLayer, so it's undo-safe); Escape cancels. An emptied
+   * input clears `layer.name` so the row falls back to its type label. */
+  const [renaming, setRenaming] = useState(false)
+  const [draft, setDraft]       = useState('')
+  const cancelRef = useRef(false)
+
+  const startRename = () => {
+    setDraft(layer.name ?? '')
+    setRenaming(true)
+  }
+  const commitRename = () => {
+    if (!cancelRef.current) onRename(draft.trim() || null)
+    cancelRef.current = false
+    setRenaming(false)
+  }
 
   return (
     <div className="kol-compose-layer-line group">
@@ -73,7 +93,7 @@ function LayerRow({
         <span aria-hidden="true" className="kol-compose-layer-collapse" />
       )}
       <div
-        draggable
+        draggable={!renaming}
         onDragStart={(e) => onDragStart(e, layer.id)}
         onDragOver={(e) => onDragOver(e, layer.id)}
         onDragLeave={(e) => onDragLeave(e, layer.id)}
@@ -88,36 +108,62 @@ function LayerRow({
         }
         data-layer-id={layer.id}
       >
+        {renaming ? (
+          <span className="kol-compose-layer-main">
+            <span className="kol-compose-layer-btn-icon" aria-hidden="true">
+              <EditorIcon name={TYPE_ICONS[layer.type] ?? 'layer-shape'} size={14} />
+            </span>
+            <Input
+              variant="ghost"
+              size="sm"
+              width="100%"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onFocus={(e) => e.target.select()}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+                else if (e.key === 'Escape') { cancelRef.current = true; e.currentTarget.blur() }
+              }}
+              autoFocus
+              placeholder={rowLabelForLayer({ ...layer, name: null })}
+              inputClassName="kol-helper-12 text-emphasis"
+            />
+          </span>
+        ) : (
+          <button
+            type="button"
+            onMouseDown={selectHandlers.onMouseDown}
+            onClick={selectHandlers.onClick}
+            onDoubleClick={startRename}
+            className="kol-compose-layer-main"
+          >
+            <span className="kol-compose-layer-btn-icon" aria-hidden="true">
+              <EditorIcon name={TYPE_ICONS[layer.type] ?? 'layer-shape'} size={14} />
+            </span>
+            <span className="kol-helper-12 truncate flex-1 text-left">
+              {rowLabelForLayer(layer)}
+            </span>
+          </button>
+        )}
         <button
           type="button"
-          onMouseDown={selectHandlers.onMouseDown}
-          onClick={selectHandlers.onClick}
-          className="kol-compose-layer-main"
+          onClick={onToggleVisibility}
+          title={layer.visible ? 'Hide' : 'Show'}
+          aria-pressed={!layer.visible}
+          className={`absolute inset-y-0 right-7 w-7 inline-flex items-center justify-center rounded text-meta hover:text-emphasis hover:bg-fg-08 transition-opacity ${!layer.visible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
         >
-          <span className="kol-compose-layer-btn-icon" aria-hidden="true">
-            <EditorIcon name={TYPE_ICONS[layer.type] ?? 'layer-shape'} size={14} />
-          </span>
-          <span className="kol-helper-12 truncate flex-1 text-left">
-            {rowLabelForLayer(layer)}
-          </span>
+          <EditorIcon name={layer.visible ? 'eye-on' : 'eye-off'} size={12} />
         </button>
         <button
           type="button"
           onClick={onToggleLock}
           title={layer.locked ? 'Unlock' : 'Lock'}
           aria-pressed={!!layer.locked}
-          className={`absolute inset-y-0 right-7 w-7 inline-flex items-center justify-center rounded text-meta hover:text-emphasis hover:bg-fg-08 transition-opacity ${layer.locked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+          className={`absolute inset-y-0 right-0 w-7 inline-flex items-center justify-center rounded hover:bg-fg-08 transition-opacity ${layer.locked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 text-meta hover:text-emphasis'}`}
+          style={layer.locked ? { color: 'var(--kol-accent-primary)' } : undefined}
         >
           <EditorIcon name={layer.locked ? 'lock' : 'unlock'} size={12} />
-        </button>
-        <button
-          type="button"
-          onClick={onToggleVisibility}
-          title={layer.visible ? 'Hide' : 'Show'}
-          aria-pressed={!layer.visible}
-          className={`absolute inset-y-0 right-0 w-7 inline-flex items-center justify-center rounded text-meta hover:text-emphasis hover:bg-fg-08 transition-opacity ${!layer.visible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-        >
-          <EditorIcon name={layer.visible ? 'eye-on' : 'eye-off'} size={12} />
         </button>
       </div>
     </div>
@@ -301,7 +347,7 @@ export default function LayerStack() { return <LayerStackBody /> }
 export function LayerStackBody() {
   const {
     selectedId, selectedIds, select, selectCanvas, toggleSelection, groupLayers,
-    layers, addLayer, removeLayer, deleteSelected, toggleLayer, toggleLayerLock, moveLayer,
+    layers, addLayer, removeLayer, deleteSelected, toggleLayer, toggleLayerLock, updateLayer, moveLayer,
     palette,
   } = useComposeState()
 
@@ -401,6 +447,7 @@ export function LayerStackBody() {
               onShiftSelect={() => toggleSelection(layer.id)}
               onToggleVisibility={() => toggleLayer(layer.id)}
               onToggleLock={() => toggleLayerLock(layer.id)}
+              onRename={(name) => updateLayer(layer.id, { name })}
               draggedId={draggedId}
               dropTargetId={dropTargetId}
               dropPosition={dropPosition}

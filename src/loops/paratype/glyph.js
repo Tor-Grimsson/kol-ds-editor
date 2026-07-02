@@ -47,6 +47,11 @@ function glyphBounds(name, p) {
 const R = (key, label, min, max, def, step = 1) =>
   ({ key, label, type: 'range', min, max, step, default: def })
 
+/* Anatomy params are glyph- (and engine-) dependent — gate each knob to the
+ * glyphs whose renderer actually reads it (see classic.js / skeleton.js). */
+const isG = (l, ks) => ks.includes(l.glyph ?? 'o')
+const isClassic = (l) => (l.engine ?? 'classic') === 'classic'
+
 export default {
   id: 'paratype-glyph',
   label: 'Glyph',
@@ -59,25 +64,24 @@ export default {
     { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#0b0b0e' },
     { key: 'fg', label: 'Glyph colour', type: 'color', role: 'fg', default: '#e8e4dc' },
     /* metrics */
-    R('xHeight', 'X-height', 40, 220, 100),
-    R('ascender', 'Ascender', 60, 260, 150),
-    R('descender', 'Descender', 5, 100, 40),
-    R('overshoot', 'Overshoot', 0, 20, 4),
+    { ...R('xHeight', 'X-height', 40, 220, 100), when: (l) => (l.glyph ?? 'o') !== 'l' },
+    { ...R('ascender', 'Ascender', 60, 260, 150), when: (l) => isG(l, ['l', 'd', 'b', 'h']) },
+    { ...R('descender', 'Descender', 5, 100, 40), when: (l) => isG(l, ['p', 'q']) },
+    { ...R('overshoot', 'Overshoot', 0, 20, 4), when: (l) => !isG(l, ['l', 'i', 't']) },
     /* weights */
     R('stemWidth', 'Stem width', 2, 60, 18),
-    R('oWidth', 'Round width', 30, 220, 95),
-    R('bowlWidth', 'Bowl width', 30, 220, 88),
-    R('hairWidth', 'Hairline', 0.5, 30, 6, 0.5),
+    { ...R('oWidth', 'Round width', 30, 220, 95), when: (l) => isG(l, ['o', 'c', 'e', 'n', 'm', 'h']) },
+    { ...R('bowlWidth', 'Bowl width', 30, 220, 88), when: (l) => isG(l, ['d', 'b', 'p', 'q']) },
+    { ...R('hairWidth', 'Hairline', 0.5, 30, 6, 0.5), when: (l) => isG(l, ['o', 'd', 'b', 'p', 'q', 'e', 'n', 'm', 'h']) || (isClassic(l) && l.glyph === 'c') },
     /* expressive (METAFONT/Amstelvar/Prototypo lineage) */
-    R('contrast', 'Contrast', 0, 1, 0.35, 0.01),
-    R('aperture', 'Aperture', 0.1, 1, 0.7, 0.01),
-    R('archHeight', 'Arch height', 0.5, 1.05, 0.92, 0.01),
-    R('shoulder', 'Shoulder', 0, 0.4, 0.12, 0.01),
-    R('superness', 'Superness', 0.1, 1.5, 0.5, 0.01),
-    R('serif', 'Serif', 0, 1, 0, 0.01),
-    R('jut', 'Jut length', 0, 1, 0, 0.01),
+    { ...R('aperture', 'Aperture', 0.1, 1, 0.7, 0.01), when: (l) => isG(l, ['c', 'e']) },
+    { ...R('archHeight', 'Arch height', 0.5, 1.05, 0.92, 0.01), when: (l) => isG(l, ['n', 'm', 'h']) },
+    { ...R('shoulder', 'Shoulder', 0, 0.4, 0.12, 0.01), when: (l) => isG(l, ['n', 'm', 'h']) },
+    { ...R('superness', 'Superness', 0.1, 1.5, 0.5, 0.01), when: (l) => isG(l, ['o', 'd', 'b', 'p', 'q']) || (!isClassic(l) && isG(l, ['c', 'e'])) },
+    { ...R('serif', 'Serif', 0, 1, 0, 0.01), when: (l) => isClassic(l) && isG(l, ['l', 'i', 'd', 'b', 'n', 'm', 'h']) },
+    { ...R('jut', 'Jut length', 0, 1, 0, 0.01), when: (l) => isClassic(l) && isG(l, ['l', 'i', 'd', 'b', 'n', 'm', 'h']) && (l.serif ?? 0) > 0 },
     /* resolution */
-    { ...R('segments', 'Segments', 6, 200, 48), noRandom: true },
+    { ...R('segments', 'Segments', 6, 200, 48), noRandom: true, when: (l) => (l.glyph ?? 'o') === 'o' || (!isClassic(l) && isG(l, ['c', 'e'])) },
   ],
   draw(ctx, u, w, h, p) {
     ctx.fillStyle = p.bg

@@ -6,7 +6,8 @@
  *   defaults  — canonical 6-color arrangement (5 layout slots + 1 background).
  *
  * Both are LIVE — resolved from CSS custom properties at access time via the
- * `colors` / `defaults` getters. Single source of truth: src/styles/kol-color.css.
+ * `colors` / `defaults` getters. Single source of truth:
+ * @kolkrabbi/kol-framework/kol-brand-color.css (imported by src/index.css).
  * Edit a token there and the lab regenerates with the new value on next render.
  *
  * Architecture: docs/kol-migration/locked/color-system.md
@@ -14,14 +15,19 @@
 
 import { resolveCssVar } from '../../../components/sections/ColorRamp'
 
-/* Token paths per ramp — single place to edit if a ramp grows / shrinks. */
+/* Token paths per ramp — single place to edit if a ramp grows / shrinks.
+ * Hue + cream ramps are the DS palette primitives (`--kol-color-{hue}-N`);
+ * grey is the fixed project neutral (`--grey-N`). These must match the
+ * declared names in kol-brand-color.css exactly — an unknown var makes the
+ * resolver probe fall back to the inherited body color, collapsing every
+ * swatch to the same hex. */
 const RAMP = {
-  yellow: [100, 200, 300, 400, 500].map(n => `--brand-yellow-${n}`),
-  red:    [100, 200, 300, 400, 500].map(n => `--brand-red-${n}`),
-  blue:   [100, 200, 300, 400, 500].map(n => `--brand-blue-${n}`),
-  orange: [100, 200, 300, 400, 500].map(n => `--brand-orange-${n}`),
-  teal:   [100, 200, 300, 400, 500].map(n => `--brand-teal-${n}`),
-  cream:  [100, 200, 300, 400, 500].map(n => `--cream-${n}`),
+  yellow: [100, 200, 300, 400, 500].map(n => `--kol-color-yellow-${n}`),
+  red:    [100, 200, 300, 400, 500].map(n => `--kol-color-red-${n}`),
+  blue:   [100, 200, 300, 400, 500].map(n => `--kol-color-blue-${n}`),
+  orange: [100, 200, 300, 400, 500].map(n => `--kol-color-orange-${n}`),
+  teal:   [100, 200, 300, 400, 500].map(n => `--kol-color-teal-${n}`),
+  cream:  [100, 200, 300, 400, 500].map(n => `--kol-color-cream-${n}`),
   grey:   [50, 100, 200, 300, 400, 500, 600, 700, 800, 900].map(n => `--grey-${n}`),
 }
 
@@ -56,7 +62,7 @@ export const POOLS = [
     'brand',
     'Brand',
     [...RAMP.yellow, ...RAMP.red],
-    ['--brand-yellow-300', '--brand-red-200', '--cream-100', '--brand-blue-400', '--brand-orange-300', '--cream-300'],
+    ['--kol-color-yellow-300', '--kol-color-red-200', '--kol-color-cream-100', '--kol-color-blue-400', '--kol-color-orange-300', '--kol-color-cream-300'],
   ),
 
   /* All · light — every brand ramp + cream + grey. Cream-leaning bg. */
@@ -64,7 +70,7 @@ export const POOLS = [
     'all-light',
     'All · light',
     [...RAMP.yellow, ...RAMP.red, ...RAMP.blue, ...RAMP.orange, ...RAMP.teal, ...RAMP.cream, ...RAMP.grey],
-    ['--brand-yellow-300', '--brand-red-200', '--cream-100', '--brand-blue-400', '--brand-orange-300', '--cream-200'],
+    ['--kol-color-yellow-300', '--kol-color-red-200', '--kol-color-cream-100', '--kol-color-blue-400', '--kol-color-orange-300', '--kol-color-cream-200'],
   ),
 
   /* All · dark — every brand ramp + cream + grey. Dark bg. */
@@ -72,22 +78,22 @@ export const POOLS = [
     'all-dark',
     'All · dark',
     [...RAMP.yellow, ...RAMP.red, ...RAMP.blue, ...RAMP.orange, ...RAMP.teal, ...RAMP.cream, ...RAMP.grey],
-    ['--brand-yellow-300', '--brand-orange-300', '--grey-700', '--brand-blue-400', '--brand-red-200', '--brand-blue-500'],
+    ['--kol-color-yellow-300', '--kol-color-orange-300', '--grey-700', '--kol-color-blue-400', '--kol-color-red-200', '--kol-color-blue-500'],
   ),
 
   /* Single-hue studies — each brand ramp on its own. */
-  pool('yellow', 'Yellow',  RAMP.yellow, [...RAMP.yellow, '--brand-yellow-100']),
-  pool('red',    'Red',     RAMP.red,    [...RAMP.red,    '--brand-red-100']),
-  pool('blue',   'Blue',    RAMP.blue,   [...RAMP.blue,   '--brand-blue-100']),
-  pool('orange', 'Orange',  RAMP.orange, [...RAMP.orange, '--brand-orange-100']),
-  pool('teal',   'Teal',    RAMP.teal,   [...RAMP.teal,   '--brand-teal-100']),
+  pool('yellow', 'Yellow',  RAMP.yellow, [...RAMP.yellow, '--kol-color-yellow-100']),
+  pool('red',    'Red',     RAMP.red,    [...RAMP.red,    '--kol-color-red-100']),
+  pool('blue',   'Blue',    RAMP.blue,   [...RAMP.blue,   '--kol-color-blue-100']),
+  pool('orange', 'Orange',  RAMP.orange, [...RAMP.orange, '--kol-color-orange-100']),
+  pool('teal',   'Teal',    RAMP.teal,   [...RAMP.teal,   '--kol-color-teal-100']),
 
   /* Cream — utility neutral, no anchor. BG extends slightly darker. */
   pool(
     'cream',
     'Cream',
     RAMP.cream,
-    [...RAMP.cream, '--brand-orange-100'],
+    [...RAMP.cream, '--kol-color-orange-100'],
   ),
 
   /* Greyscale — legacy 10-stop kept until opacity-hex revival. */
@@ -106,7 +112,9 @@ function buildTokenMap() {
   for (const tokens of Object.values(RAMP)) {
     for (const t of tokens) {
       const hex = resolveCssVar(t).toUpperCase()
-      const name = t.replace(/^--/, '')
+      /* Display name: drop the `--kol-color-` / `--` prefix so palette-panel
+       * labels stay short (`yellow-300`, `cream-300`, `grey-500`). */
+      const name = t.replace(/^--kol-color-/, '').replace(/^--/, '')
       if (hex) map[hex] = name
     }
   }

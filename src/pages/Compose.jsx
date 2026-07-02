@@ -12,8 +12,8 @@ import TimelineDock from '../editor/params/TimelineDock'
  * Compose mode body. File / Mode / Canvas / Templates menus live in the
  * topbar (rendered by EditorShell). ToolPalette sits above the canvas in
  * the canvas-column header. Left rail: ColorModal (top) + Layers/Assets
- * tab group (bottom). Right rail: Palette/Inspector tab group that
- * auto-flips to Inspector on layer-select.
+ * tab group + the Transport/Output/File footer (pinned). Right rail:
+ * Palette/Inspector tab group that auto-flips to Inspector on layer-select.
  */
 const COMPOSE_REGISTRY = {
   canvas: CanvasArea,
@@ -22,8 +22,8 @@ const COMPOSE_REGISTRY = {
     { slot: 'canvas.footer', order: 0,  Component: TimelineDock },
     { slot: 'left.body',     order: -1, Component: ColorModal },
     { slot: 'left.body',     order: 0,  Component: LayersAssetsPanel },
+    { slot: 'left.footer',   order: 0,  Component: EditorFooter },
     { slot: 'right.body',    order: 0,  Component: SelectionPalettePanel },
-    { slot: 'right.footer',  order: 0,  Component: EditorFooter },
   ],
 }
 

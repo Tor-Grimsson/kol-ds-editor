@@ -8,9 +8,11 @@
 
 export const SNAP_THRESHOLD = 6
 
-/* Build the candidate target list from the canvas bounds + every
- * positioned layer except the one being moved. */
-export function computeSnapTargets(layers, excludeId, canvasW, canvasH) {
+/* Build the candidate target list from the canvas bounds, every positioned
+ * layer except the one being moved, and (optionally) the ruler guides
+ * `{ h: y[], v: x[] }` — vertical guides are x targets, horizontal ones
+ * y targets. */
+export function computeSnapTargets(layers, excludeId, canvasW, canvasH, guides = null) {
   const h = [
     { value: 0,             source: 'canvas-left'   },
     { value: canvasW / 2,   source: 'canvas-center' },
@@ -32,6 +34,10 @@ export function computeSnapTargets(layers, excludeId, canvasW, canvasH) {
     v.push({ value: l.y,            source: `${l.id}-top`    })
     v.push({ value: l.y + lh / 2,   source: `${l.id}-middle` })
     v.push({ value: l.y + lh,       source: `${l.id}-bottom` })
+  }
+  if (guides) {
+    for (const x of guides.v ?? []) h.push({ value: x, source: 'guide' })
+    for (const y of guides.h ?? []) v.push({ value: y, source: 'guide' })
   }
   return { h, v }
 }

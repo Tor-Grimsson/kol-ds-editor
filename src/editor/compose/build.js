@@ -19,13 +19,14 @@ import lockupHoriRaw  from '../../brand/logos/svg/kol-lockup-hori.svg?raw'
 import lockupVertRaw  from '../../brand/logos/svg/kol-lockup-vert.svg?raw'
 import { ASPECTS }    from '../shell/aspects'
 import { resolveColor, CANVAS_W } from './state'
-import { familyFor }  from '../modes/type/cuts'
+import { familyFor, applyCase } from '../modes/type/cuts'
 import { buildPatternSvg } from '../modes/pattern/render'
 import { getShapeSvg }     from '../modes/pattern/shapes'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
-import { loopById } from '../../loops/registry'
+import { loopById, loopDrawParams } from '../../loops/registry'
 import { transport } from '../params/transport'
+import { kineticFontCss } from '../../kinetic/fonts'
 
 const LOGO_RAW = {
   logomark:      logomarkRaw,
@@ -136,6 +137,28 @@ function photoLayerSvg(layer, w, h, idx, defs) {
     const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
     if (live) return `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${lx}" y="${ly}" width="${lw}" height="${lh}"/>`
   }
+  /* Unfiltered video — draw the live <video>'s CURRENT frame to a temp
+   * canvas (fit-aware) and embed as <image>; SVG can't reference video.
+   * Sources are same-origin (/media proxy) or object URLs, so the canvas
+   * stays untainted. Crop never applies to video (gated at entry). */
+  if (layer.srcType === 'video' && typeof document !== 'undefined') {
+    const live = document.querySelector(`video[data-layer-id="${layer.id}"]`)
+    if (!live || !live.videoWidth) return ''
+    const c = document.createElement('canvas')
+    c.width = Math.max(1, Math.round(lw))
+    c.height = Math.max(1, Math.round(lh))
+    const g = c.getContext('2d')
+    const sw = live.videoWidth
+    const sh = live.videoHeight
+    const fit = layer.fit ?? 'cover'
+    if (fit === 'fill') {
+      g.drawImage(live, 0, 0, c.width, c.height)
+    } else {
+      const k = fit === 'contain' ? Math.min(c.width / sw, c.height / sh) : Math.max(c.width / sw, c.height / sh)
+      g.drawImage(live, (c.width - sw * k) / 2, (c.height - sh * k) / 2, sw * k, sh * k)
+    }
+    return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${lx}" y="${ly}" width="${lw}" height="${lh}"/>`
+  }
   /* Cropped photo — explicit crop window (imgX/Y/W/H frame-local): image
    * at its own rect, clipped to the frame. Mirrors PhotoLayer's cropped
    * branch. */
@@ -144,7 +167,7 @@ function photoLayerSvg(layer, w, h, idx, defs) {
     defs.push(`<clipPath id="${clipId}"><rect x="${lx}" y="${ly}" width="${lw}" height="${lh}"/></clipPath>`)
     return `<g clip-path="url(#${clipId})"><image href="${escapeXml(layer.src)}" x="${(lx + layer.imgX).toFixed(2)}" y="${(ly + layer.imgY).toFixed(2)}" width="${layer.imgW.toFixed(2)}" height="${layer.imgH.toFixed(2)}" preserveAspectRatio="none"/></g>`
   }
-  const par = layer.fit === 'contain' ? 'xMidYMid meet' : 'xMidYMid slice'
+  const par = layer.fit === 'contain' ? 'xMidYMid meet' : layer.fit === 'fill' ? 'none' : 'xMidYMid slice'
   return `<image href="${escapeXml(layer.src)}" x="${lx}" y="${ly}" width="${lw}" height="${lh}" preserveAspectRatio="${par}"/>`
 }
 
@@ -281,7 +304,7 @@ function textLayerSvg(layer, palette) {
   const lh     = layer.lineHeight ?? 1.05
   const tcase  = layer.case === 'upper' ? 'uppercase' : layer.case === 'lower' ? 'lowercase' : 'none'
   const align  = layer.textAlign ?? 'center'
-  const text   = escapeXml(layer.text ?? '').replace(/\n/g, '<br/>')
+  const text   = escapeXml(applyCase(layer.text ?? '', layer.case)).replace(/\n/g, '<br/>')
   const strokeCss = strokeColor && sw > 0
     ? `-webkit-text-stroke:${sw}px ${strokeColor};paint-order:stroke fill;`
     : ''
@@ -316,8 +339,34 @@ function loopLayerSvg(layer) {
   c.height = Math.round(lh * scale)
   const g = c.getContext('2d')
   g.scale(scale, scale)
-  loop.draw(g, transport.getT(), lw, lh, layer)
+  /* Same bg suppression as the live LoopLayer (fresh canvas → already clear). */
+  loop.draw(g, transport.getT(), lw, lh, loopDrawParams(loop, layer))
   return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${x}" y="${y}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
+}
+
+/* Kinetic-type layer — VECTOR export: serialize the live engine's SVG subtree
+ * (the engine renders pure <text> glyphs with inline styles) and embed it as
+ * a nested <svg> at the layer's bounds, with the used fonts inlined as base64
+ * @font-face css (warmed at layer mount — see kinetic/fonts.js). Crisp at any
+ * @Nx; the PNG path rasterizes it through the same SVG-in-<img> pipeline the
+ * labs engine used, where data-URI fonts resolve fine. If the font cache
+ * isn't warm yet the glyphs fall back to system faces in the export — the
+ * live canvas is unaffected. */
+function kineticLayerSvg(layer) {
+  if (typeof document === 'undefined') return ''
+  const host = document.querySelector(`[data-kinetic-host][data-layer-id="${layer.id}"]`)
+  const svg = host?.querySelector('svg')
+  if (!svg) return ''
+  const clone = svg.cloneNode(true)
+  clone.setAttribute('x', (layer.x ?? 0).toFixed(2))
+  clone.setAttribute('y', (layer.y ?? 0).toFixed(2))
+  const css = kineticFontCss(layer.comp)
+  if (css) {
+    const style = document.createElementNS('http://www.w3.org/2000/svg', 'style')
+    style.textContent = css
+    clone.insertBefore(style, clone.firstChild)
+  }
+  return new XMLSerializer().serializeToString(clone)
 }
 
 /* Recursive group export: a `<g transform="translate(gx gy)">` containing
@@ -336,9 +385,21 @@ function groupLayerSvg(layer, palette, w, h, idx, defs) {
 
 /* Per-layer dispatch + opacity/blend wrap. Returns the wrapped body string,
  * or empty string for invisible / unrenderable layers. Mutates `defs`
- * (pattern layer pushes a `<pattern>` def). */
-function layerToSvg(layer, palette, w, h, idx, defs) {
+ * (pattern layer pushes a `<pattern>` def). Exported — rasterizeLayer (the
+ * universal-effects source seam) builds a single-layer SVG from it. */
+export function layerToSvg(layer, palette, w, h, idx, defs) {
   if (!layer.visible) return ''
+  /* Effected non-photo layer — snapshot the LIVE effect canvas (photo has
+   * its own branch inside photoLayerSvg; loops inside loopLayerSvg). wrap()
+   * below still applies opacity/blend/rotation — the backing store holds
+   * unrotated content. */
+  if (layer.filterId && layer.type !== 'photo' && layer.type !== 'loop' && typeof document !== 'undefined') {
+    const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
+    if (live) {
+      const body = `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${(layer.x ?? 0).toFixed(2)}" y="${(layer.y ?? 0).toFixed(2)}" width="${(layer.w ?? 0).toFixed(2)}" height="${(layer.h ?? 0).toFixed(2)}"/>`
+      return wrap(layer, body)
+    }
+  }
   let body = ''
   switch (layer.type) {
     case 'background': body = backgroundLayerSvg(layer, palette, w, h); break
@@ -353,6 +414,7 @@ function layerToSvg(layer, palette, w, h, idx, defs) {
     case 'text':       body = textLayerSvg(layer, palette); break
     case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs); break
     case 'loop':       body = loopLayerSvg(layer); break
+    case 'kinetic':    body = kineticLayerSvg(layer); break
     default: break
   }
   if (!body) return ''

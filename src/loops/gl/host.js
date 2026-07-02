@@ -22,6 +22,21 @@ import { PALETTES as MESH_PALETTES, shiftHue } from './meshPalettes.js'
 import { mulberry32 } from './rng.js'
 
 export function createEngine(def, canvas) {
+  const engine = buildEngine(def, canvas)
+  /* OrbitControls attach to the layer canvas at construction and would fight
+   * the editor's move-drag — start disabled; the layer's `cameraDrag` toggle
+   * enables them (setCameraDrag). */
+  if (engine.controls) engine.controls.enabled = false
+  return engine
+}
+
+/* Enable/disable the engine's interactive camera (no-op for engines
+ * without OrbitControls). */
+export function setCameraDrag(def, engine, on) {
+  if (engine?.controls) engine.controls.enabled = !!on
+}
+
+function buildEngine(def, canvas) {
   switch (def.engine) {
     case 'drift': {
       const e = new DriftEngine(def.family)
@@ -64,6 +79,15 @@ export function createEngine(def, canvas) {
 const HOST_CLOCK = { loop: true, paused: false, speed: 0 }
 
 export function applyParams(def, engine, params) {
+  applyEngineParams(def, engine, params)
+  /* Background toggle (scene-type engines, def.bgToggle): the renderers are
+   * alpha:true — clear-alpha 0 makes the backdrop transparent. Runs AFTER
+   * the per-engine update so engine-internal setClearColor calls (alpha 1)
+   * don't win. */
+  if (def.bgToggle) engine.renderer?.setClearAlpha(params.bgOn === false ? 0 : 1)
+}
+
+function applyEngineParams(def, engine, params) {
   switch (def.engine) {
     case 'scene': {
       /* PrimitiveEngine takes update({globals, primitive}); host owns the
@@ -124,11 +148,14 @@ export function applyParams(def, engine, params) {
           flow: params.flow, cameraOrbit: params.cameraOrbit, orbitSpeed: params.orbitSpeed,
           fov: params.fov, materialType: params.materialType, color: params.ribbonColor,
           roughness: params.roughness, metalness: params.metalness, ior: params.ior,
-          dispersion: params.dispersion, background: params.background,
+          dispersion: params.dispersion,
           wireframe: false, strokeWidth: 2.5,
           aberration: params.aberration, bloom: params.bloom, vignette: params.vignette, grain: params.grain,
         },
       })
+      /* update() ignores globals.background — the clear colour has its own
+       * setter (applyParams' bgToggle clear-alpha pass runs after this). */
+      if (params.background != null) engine.setBackground(params.background)
       return
     case 'mesh': {
       /* Build ONE tile spec, mirroring the labs page's seeded resolveSpec —
@@ -181,6 +208,13 @@ export function driveEngine(def, engine, { u, dt }) {
 
 export function destroyEngine(engine) {
   if (!engine) return
-  if (typeof engine.dispose === 'function') engine.dispose()
-  else if (typeof engine.destroy === 'function') engine.destroy()
+  /* Teardown runs inside React's unmount cleanup — a throw here would kill
+   * the whole tree (the blank-screen-on-delete bug). Engines are being
+   * discarded anyway; log and move on. */
+  try {
+    if (typeof engine.dispose === 'function') engine.dispose()
+    else if (typeof engine.destroy === 'function') engine.destroy()
+  } catch (err) {
+    console.warn('[gl] engine dispose failed (ignored):', err?.message ?? err)
+  }
 }

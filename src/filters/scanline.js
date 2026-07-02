@@ -67,10 +67,12 @@ export default {
       ] },
     { key: 'bg', label: 'Background', type: 'color', default: '#06070b' },
     { key: 'fg', label: 'Ink', type: 'color', default: '#f4f1ea' },
-    { key: 'markSize', label: 'Mark size', type: 'range', min: 0.2, max: 3, step: 0.05, default: 1 },
+    /* glyph marks size via the look's fixed fontScale/rows, not markSize */
+    { key: 'markSize', label: 'Mark size', type: 'range', min: 0.2, max: 3, step: 0.05, default: 1, when: (l) => l.look !== 'ascii' },
     { key: 'invert', label: 'Invert', type: 'toggle', default: false },
     { key: 'pulse', label: 'Pulse', type: 'range', min: 0, max: 1, step: 0.05, default: 0 },
-    { key: 'sweep', label: 'Sweep', type: 'range', min: 0, max: 1, step: 0.05, default: 0 },
+    /* the engine's sweep wave skips the lattice mark (mesh look) */
+    { key: 'sweep', label: 'Sweep', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: (l) => l.look !== 'mesh' },
   ],
   apply(ctx, src, w, h, p, u) {
     const look = LOOKS[p.look] || LOOKS.photo

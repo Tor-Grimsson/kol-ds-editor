@@ -35,6 +35,19 @@ function scratchFor(w, h) {
   return scratch
 }
 
+/* Amount for DRAW-based filters (the HALFTONE trio paints glyphs/shapes, not
+ * pixel buffers, so runFx's ImageData mix doesn't apply): the labs pages'
+ * crossfade — paint the fitted source back over the effect at 1 − amount
+ * (AsciiPage/DitherPage `globalAlpha = 1 - a`). Call after the effect pass. */
+export function mixSourceOver(ctx, src, w, h, amount) {
+  const amt = amount == null ? 1 : Math.max(0, Math.min(1, amount / 100))
+  if (amt >= 1) return
+  ctx.save()
+  ctx.globalAlpha = 1 - amt
+  ctx.drawImage(src, 0, 0, w, h)
+  ctx.restore()
+}
+
 export function runFx(ctx, src, w, h, processor, params, amount) {
   const { base, out } = buffersFor(src)
   processor(base.data, out.data, src.width, src.height, params)

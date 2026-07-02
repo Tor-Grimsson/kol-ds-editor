@@ -1,5 +1,6 @@
+import { Fragment } from 'react'
 import { Slider, Dropdown, ViewToggle, LabeledControl, Textarea } from '@kolkrabbi/kol-component'
-import { visibleParams, isAnimatable } from './schema'
+import { visibleParams, isAnimatable, paramTab, paramSection } from './schema'
 import { isBinding } from './resolve'
 import { ColorField } from '../compose/inspectors/ColorField'
 
@@ -14,26 +15,47 @@ import { ColorField } from '../compose/inspectors/ColorField'
  * `renderAnimate` (optional) is called for each animatable param and rendered
  * beside its control — the seam the timeline uses to add keyframe/modulation
  * bindings without AutoControls knowing about the transport.
+ *
+ * `tab` (optional) renders only params whose resolved sub-tab matches
+ * ('generate' | 'style' | 'anim' — see paramTab); absent renders all.
+ * Consecutive same-section params share one small header; `emptyHint`
+ * renders when the filter leaves nothing (the Animation tab's hint line).
  */
-export default function AutoControls({ schema, layer, setProp, palette, renderAnimate }) {
-  const params = visibleParams(schema, layer)
+export default function AutoControls({ schema, layer, setProp, palette, renderAnimate, tab, emptyHint }) {
+  let params = visibleParams(schema, layer)
+  if (tab) params = params.filter((p) => paramTab(p) === tab)
+  if (params.length === 0) {
+    return emptyHint ? <p className="kol-helper-12 text-meta">{emptyHint}</p> : null
+  }
+  const groups = []
+  for (const p of params) {
+    const section = paramSection(p)
+    const last = groups[groups.length - 1]
+    if (last && last.section === section) last.params.push(p)
+    else groups.push({ section, params: [p] })
+  }
   return (
     <>
-      {params.map((p) => {
-        const bound = isBinding(layer[p.key])
-        const animate = renderAnimate && isAnimatable(p) ? renderAnimate(p, bound) : null
-        return (
-          <ParamControl
-            key={p.key}
-            param={p}
-            layer={layer}
-            setProp={setProp}
-            palette={palette}
-            bound={bound}
-            animate={animate}
-          />
-        )
-      })}
+      {groups.map((g) => (
+        <Fragment key={g.params[0].key}>
+          {g.section && <span className="kol-helper-10 text-meta">{g.section}</span>}
+          {g.params.map((p) => {
+            const bound = isBinding(layer[p.key])
+            const animate = renderAnimate && isAnimatable(p) ? renderAnimate(p, bound) : null
+            return (
+              <ParamControl
+                key={p.key}
+                param={p}
+                layer={layer}
+                setProp={setProp}
+                palette={palette}
+                bound={bound}
+                animate={animate}
+              />
+            )
+          })}
+        </Fragment>
+      ))}
     </>
   )
 }

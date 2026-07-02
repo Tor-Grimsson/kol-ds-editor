@@ -35,7 +35,12 @@ export const GL_GROUPS = [
 
 /* ── shared option builders ─────────────────────────────────────────── */
 const opts = (arr) => arr.map((o) => ({ value: o.value ?? o.id, label: o.label }))
-const range = (key, label, min, max, step, dflt) => ({ key, label, type: 'range', min, max, step, default: dflt })
+const range = (key, label, min, max, step, dflt, extra) => ({ key, label, type: 'range', min, max, step, default: dflt, ...extra })
+/* Sub-tab/section metadata (params/schema.js grammar) spread over a run of
+ * params; a param's own explicit tab/section wins. */
+const tag = (meta, params) => params.map((p) => ({ ...meta, ...p }))
+const ANIM = { tab: 'anim', section: 'Motion' }
+const CAM_ANIM = { tab: 'anim', section: 'Camera' }
 
 const GRAD_PALETTE_OPTS = opts(GRAD_PALETTES)
 const BACKDROP_OPTS     = opts(BACKDROPS)
@@ -46,35 +51,47 @@ const DRIFT_STYLES = {
   water: [{ value: 'waves', label: 'Waves' }, { value: 'ripples', label: 'Ripples' }, { value: 'caustics', label: 'Caustics' }],
   cloth: [{ value: 'folds', label: 'Folds' }, { value: 'flag', label: 'Flag' }, { value: 'drape', label: 'Drape' }],
 }
-/* Ranges from the labs DriftEditor PARAM dict. */
+/* Ranges from the labs DriftEditor PARAM dict. Per-style gates follow the
+ * shaders: uWarp/clouds-sheen exist only in the air fragment (clouds branch);
+ * the water caustics branch returns before uFlow/uLight/uAmp/uFoam/uSheen. */
+const notCaustics = (l) => l.style !== 'caustics'
 const driftCommon = (family) => [
-  { key: 'style', label: 'Style', type: 'select', default: DRIFT_STYLES[family][0].value, options: DRIFT_STYLES[family] },
-  { key: 'palette', label: 'Palette', type: 'select', default: PALETTES[family][0].value, options: opts(PALETTES[family]) },
-  range('freq', 'Scale', 0.3, 3, 0.05, 1),
-  range('warp', 'Warp', 0, 3, 0.05, 1.6),
-  range('evolve', 'Evolve', 0, 1, 0.01, 0.16),
-  range('direction', 'Direction', 0, 360, 1, 25),
-  range('sheen', 'Sheen', 0, 1.5, 0.05, 0.4),
-  range('contrast', 'Contrast', 0.3, 2.5, 0.05, 1.1),
-  range('grain', 'Grain', 0, 0.2, 0.005, 0.03),
+  { key: 'style', label: 'Style', type: 'select', default: DRIFT_STYLES[family][0].value, options: DRIFT_STYLES[family], section: 'Field' },
+  { key: 'palette', label: 'Palette', type: 'select', default: PALETTES[family][0].value, options: opts(PALETTES[family]), section: 'Field' },
+  range('freq', 'Scale', 0.3, 3, 0.05, 1, { section: 'Field' }),
+  /* uWarp is read by the air shader only (clouds domain-warp) */
+  ...(family === 'air'
+    ? [{ ...range('warp', 'Warp', 0, 3, 0.05, 1.6, { section: 'Field' }), when: (l) => (l.style ?? 'clouds') === 'clouds' }]
+    : []),
+  range('evolve', 'Evolve', 0, 1, 0.01, 0.16, ANIM),
+  family === 'water'
+    ? { ...range('direction', 'Direction', 0, 360, 1, 25, ANIM), when: notCaustics }
+    : range('direction', 'Direction', 0, 360, 1, 25, ANIM),
+  family === 'air'
+    ? { ...range('sheen', 'Sheen', 0, 1.5, 0.05, 0.4, { section: 'Look' }), when: (l) => (l.style ?? 'clouds') === 'clouds' }
+    : family === 'water'
+      ? { ...range('sheen', 'Sheen', 0, 1.5, 0.05, 0.4, { section: 'Look' }), when: notCaustics }
+      : range('sheen', 'Sheen', 0, 1.5, 0.05, 0.4, { section: 'Look' }),
+  range('contrast', 'Contrast', 0.3, 2.5, 0.05, 1.1, { section: 'Look' }),
+  range('grain', 'Grain', 0, 0.2, 0.005, 0.03, { section: 'Look' }),
 ]
 const DRIFT_FAMILY_EXTRAS = {
   air: [
-    range('wind', 'Gust', 0, 1.5, 0.02, 0.22),
-    range('coverage', 'Coverage', 0, 1, 0.01, 0.6),
-    range('soft', 'Softness', 0, 1, 0.01, 0.6),
+    range('wind', 'Gust', 0, 1.5, 0.02, 0.22, ANIM),
+    range('coverage', 'Coverage', 0, 1, 0.01, 0.6, { section: 'Sky' }),
+    range('soft', 'Softness', 0, 1, 0.01, 0.6, { section: 'Sky' }),
   ],
-  water: [
-    range('amp', 'Amplitude', 0, 1.5, 0.02, 0.8),
+  water: tag({ section: 'Water' }, [
+    { ...range('amp', 'Amplitude', 0, 1.5, 0.02, 0.8), when: notCaustics },
     range('chop', 'Choppiness', 0, 1.5, 0.02, 0.5),
-    range('foam', 'Foam', 0, 1, 0.01, 0.35),
-    range('light', 'Light', 0, 360, 1, 60),
-  ],
+    { ...range('foam', 'Foam', 0, 1, 0.01, 0.35), when: notCaustics },
+    { ...range('light', 'Light', 0, 360, 1, 60), when: notCaustics },
+  ]),
   cloth: [
-    range('fold', 'Fold', 0, 2, 0.02, 0.7),
-    range('drape', 'Drape', 0, 1.5, 0.02, 0.5),
-    range('sway', 'Sway', 0, 1.5, 0.02, 0.5),
-    range('light', 'Light', 0, 360, 1, 50),
+    range('fold', 'Fold', 0, 2, 0.02, 0.7, { section: 'Cloth' }),
+    range('drape', 'Drape', 0, 1.5, 0.02, 0.5, { section: 'Cloth' }),
+    range('sway', 'Sway', 0, 1.5, 0.02, 0.5, ANIM),
+    range('light', 'Light', 0, 360, 1, 50, { section: 'Cloth' }),
   ],
 }
 const driftLoop = (family, label) => ({
@@ -88,22 +105,31 @@ const DRIFT_PRESETS = Object.entries(SUBPAGES).flatMap(([family, pages]) =>
 )
 
 /* ── Gradients (IridescentEngine) — cat×type pinned by preset ────────── */
+/* cat/type are pinned by the preset (engine defaults: cat 2 volume, type 0
+ * blobs) — several knobs only exist in some shader branches, so they gate on
+ * the preset-set cat/type the same way scene3d gates on count. */
+const iCat = (l) => Math.round(l.cat ?? 2)
+const iType = (l) => Math.round(l.type ?? 0)
 const IRIDESCENT_LOOP = {
   id: 'iridescent', label: 'Iridescent', group: 'gradients', kind: 'engine', engine: 'iridescent',
   drive: 'dt', duration: 8,
   params: [
-    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS },
-    { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS },
-    range('count', 'Count', 1, 12, 1, 5),
-    range('size', 'Size', 0.1, 2, 0.05, 1),
-    range('spread', 'Spread', 0, 2, 0.05, 1),
-    range('irid', 'Iridescence', 0, 2, 0.05, 1),
-    range('hue', 'Hue shift', 0, 1, 0.01, 0),
-    range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5),
-    range('gloss', 'Gloss', 0, 1.5, 0.05, 0.5),
-    range('warp', 'Warp', 0, 2, 0.05, 0.5),
-    range('grain', 'Grain', 0, 0.2, 0.005, 0.03),
-    range('speed', 'Speed', 0, 3, 0.05, 1),
+    /* uSpectral defaults ON in the engine — the palette ramp only shows once
+     * it's switched off (tint() = mix(ramp, rainbow, uSpectral)). */
+    { key: 'spectral', label: 'Spectral', type: 'toggle', default: true, section: 'Color' },
+    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS, section: 'Color', when: (l) => !(l.spectral ?? true) },
+    { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS, section: 'Color', when: (l) => iCat(l) === 2 },
+    { ...range('count', 'Count', 1, 6, 1, 5, { section: 'Composition' }), when: (l) => (iCat(l) === 2 && iType(l) === 0) || (iCat(l) === 1 && iType(l) === 1) },
+    { ...range('size', 'Size', 0.1, 2, 0.05, 1, { section: 'Composition' }), when: (l) => iCat(l) === 2 && (iType(l) === 0 || iType(l) === 2) },
+    { ...range('spread', 'Spread', 0, 2, 0.05, 1, { section: 'Composition' }), when: (l) => (iCat(l) === 1 && iType(l) <= 1) || (iCat(l) === 2 && iType(l) === 0) },
+    { ...range('irid', 'Iridescence', 0, 2, 0.05, 1, { section: 'Look' }), when: (l) => !(iCat(l) === 1 && (iType(l) === 1 || iType(l) === 2)) },
+    range('hue', 'Hue shift', 0, 1, 0.01, 0, { section: 'Look' }),
+    { ...range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5, { section: 'Look' }), when: (l) => iCat(l) === 2 || (iCat(l) === 1 && iType(l) <= 1) },
+    /* gloss is a specular pow() exponent (labs CTRL_SPEC 4–90), not a 0–1 amount */
+    { ...range('gloss', 'Gloss', 4, 90, 1, 24, { section: 'Look' }), when: (l) => iCat(l) === 2 },
+    range('warp', 'Warp', 0, 2, 0.05, 0.5, { section: 'Look' }),
+    range('grain', 'Grain', 0, 0.2, 0.005, 0.03, { section: 'Look' }),
+    range('speed', 'Speed', 0, 3, 0.05, 1, ANIM),
   ],
 }
 /* cat 0=field / 1=pole / 2=volume; type indexes the shader branch. */
@@ -121,18 +147,21 @@ const IRIDESCENT_PRESETS = [
 
 /* ── Soft forms 2D / 3D — scenes carry `forms` arrays as opaque params ── */
 const SOFTFORMS_PARAMS = [
-  { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS },
-  { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS },
-  range('hue', 'Hue shift', 0, 1, 0.01, 0),
-  range('irid', 'Iridescence', 0, 2, 0.05, 1),
-  range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5),
-  range('gloss', 'Gloss', 0, 1.5, 0.05, 0.5),
-  range('rim', 'Rim light', 0, 2, 0.05, 1),
-  range('motion', 'Motion', 0, 1.5, 0.02, 0.4),
-  range('sweep', 'Sweep', 0, 360, 1, 20),
-  { key: 'spectral', label: 'Spectral', type: 'toggle', default: false },
-  range('grain', 'Grain', 0, 0.2, 0.005, 0.03),
-  range('speed', 'Speed', 0, 3, 0.05, 1),
+  { key: 'spectral', label: 'Spectral', type: 'toggle', default: false, section: 'Color' },
+  /* tint() = mix(ramp, rainbow, uSpectral) — the palette ramp only shows while
+   * Spectral is off. */
+  { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS, section: 'Color', when: (l) => !l.spectral },
+  { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS, section: 'Color' },
+  range('hue', 'Hue shift', 0, 1, 0.01, 0, { section: 'Look' }),
+  range('irid', 'Iridescence', 0, 2, 0.05, 1, { section: 'Look' }),
+  range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5, { section: 'Look' }),
+  /* gloss is a specular pow() exponent (labs CTRL_SPEC 4–90), not a 0–1 amount */
+  range('gloss', 'Gloss', 4, 90, 1, 32, { section: 'Look' }),
+  range('rim', 'Rim light', 0, 2, 0.05, 1, { section: 'Look' }),
+  range('motion', 'Motion', 0, 1.5, 0.02, 0.4, ANIM),
+  range('sweep', 'Sweep', 0, 360, 1, 20, ANIM),
+  range('grain', 'Grain', 0, 0.2, 0.005, 0.03, { section: 'Look' }),
+  range('speed', 'Speed', 0, 3, 0.05, 1, ANIM),
 ]
 const SOFTFORMS_LOOP = {
   id: 'softforms', label: 'Soft forms', group: 'softforms', kind: 'engine', engine: 'softforms',
@@ -148,10 +177,10 @@ const SOFTFORMS3D_LOOP = {
   drive: 'dt', duration: 8,
   params: [
     ...SOFTFORMS_PARAMS,
-    { key: 'metaball', label: 'Metaball', type: 'toggle', default: false },
-    range('camTheta', 'Camera θ', 0, 6.28, 0.01, 0.3),
-    range('camPhi', 'Camera φ', -1.2, 1.2, 0.01, 0.35),
-    range('camDist', 'Camera distance', 1.5, 8, 0.05, 3),
+    { key: 'metaball', label: 'Metaball', type: 'toggle', default: false, section: 'Form' },
+    range('camTheta', 'Camera θ', 0, 6.28, 0.01, 0.3, { section: 'Camera' }),
+    range('camPhi', 'Camera φ', -1.2, 1.2, 0.01, 0.35, { section: 'Camera' }),
+    range('camDist', 'Camera distance', 1.5, 8, 0.05, 3, { section: 'Camera' }),
   ],
 }
 const SOFTFORMS3D_PRESETS = SCENES_3D.map((s) => ({
@@ -169,26 +198,30 @@ const MATERIALS = [
   { value: 'dispersion', label: 'Dispersion' },
 ]
 const SCENE_LOOP = {
-  id: 'scene3d', label: '3D scene', group: 'scene', kind: 'engine', engine: 'scene',
+  id: 'scene3d', label: '3D scene', group: 'scene', kind: 'engine', engine: 'scene', orbit: true, bgToggle: true,
   drive: 'seek', duration: 8,
   params: [
-    { key: 'primitive', label: 'Primitive', type: 'select', default: 'torusKnot', options: opts(PRIMITIVES) },
-    { key: 'pose', label: 'Motion', type: 'select', default: 'spin', options: opts(POSE_PRESETS) },
-    range('count', 'Count', 1, 9, 1, 1),
-    { key: 'arrangement', label: 'Arrangement', type: 'select', default: 'single', options: ARRANGEMENTS },
-    range('spread', 'Spread', 0.5, 5, 0.1, 2.2),
-    range('objectSize', 'Object size', 0.2, 3, 0.05, 1),
-    range('stagger', 'Stagger', 0, 1, 0.05, 0),
-    { key: 'materialType', label: 'Material', type: 'select', default: 'standard', options: MATERIALS },
-    { key: 'sceneColor', label: 'Color', type: 'color', default: '#b9c2d0' },
-    range('roughness', 'Roughness', 0, 1, 0.02, 0.38),
-    range('metalness', 'Metalness', 0, 1, 0.02, 0.18),
-    { key: 'wireframe', label: 'Wireframe', type: 'toggle', default: false },
-    range('strokeWidth', 'Stroke width', 1, 10, 0.5, 3),
-    range('fov', 'FOV', 15, 90, 1, 38),
-    { key: 'cameraMotion', label: 'Camera orbit', type: 'toggle', default: false },
-    range('orbitSpeed', 'Orbit speed', 0, 3, 0.05, 1),
-    { key: 'environment', label: 'Environment', type: 'toggle', default: false },
+    { key: 'primitive', label: 'Primitive', type: 'select', default: 'torusKnot', options: opts(PRIMITIVES), section: 'Primitive' },
+    { key: 'pose', label: 'Motion', type: 'select', default: 'spin', options: opts(POSE_PRESETS), tab: 'anim', section: 'Motion' },
+    range('count', 'Count', 1, 9, 1, 1, { section: 'Composition' }),
+    /* Multi-object knobs are no-ops at count 1 — hidden until they act. */
+    { key: 'arrangement', label: 'Arrangement', type: 'select', default: 'single', options: ARRANGEMENTS, when: (l) => (l.count ?? 1) > 1, section: 'Composition' },
+    { ...range('spread', 'Spread', 0.5, 5, 0.1, 2.2, { section: 'Composition' }), when: (l) => (l.count ?? 1) > 1 },
+    range('objectSize', 'Object size', 0.2, 3, 0.05, 1, { section: 'Composition' }),
+    { ...range('stagger', 'Stagger', 0, 1, 0.05, 0, { section: 'Composition' }), when: (l) => (l.count ?? 1) > 1 },
+    { key: 'materialType', label: 'Material', type: 'select', default: 'standard', options: MATERIALS, section: 'Material' },
+    /* Material-dependent knobs (per makeMaterial/applyMaterialProps):
+     * normal ignores colour; roughness exists on standard + the physical pair;
+     * metalness only applies to standard; env IBL only lights PBR materials. */
+    { key: 'sceneColor', label: 'Color', type: 'color', default: '#b9c2d0', section: 'Material', when: (l) => (l.materialType ?? 'standard') !== 'normal' || !!l.wireframe },
+    { ...range('roughness', 'Roughness', 0, 1, 0.02, 0.38, { section: 'Material' }), when: (l) => ['standard', 'glass', 'dispersion'].includes(l.materialType ?? 'standard') },
+    { ...range('metalness', 'Metalness', 0, 1, 0.02, 0.18, { section: 'Material' }), when: (l) => (l.materialType ?? 'standard') === 'standard' },
+    { key: 'wireframe', label: 'Wireframe', type: 'toggle', default: false, section: 'Material' },
+    { ...range('strokeWidth', 'Stroke width', 1, 10, 0.5, 3, { section: 'Material' }), when: (l) => !!l.wireframe },
+    { key: 'environment', label: 'Environment', type: 'toggle', default: false, section: 'Material', when: (l) => ['standard', 'glass', 'dispersion'].includes(l.materialType ?? 'standard') },
+    range('fov', 'FOV', 15, 90, 1, 38, { section: 'Camera' }),
+    { key: 'cameraMotion', label: 'Camera orbit', type: 'toggle', default: false, tab: 'anim', section: 'Camera' },
+    { ...range('orbitSpeed', 'Orbit speed', 0, 3, 0.05, 1, CAM_ANIM), when: (l) => !!l.cameraMotion },
   ],
 }
 const SP = (id, label, params) => ({ id: `scene-${id}`, label, loop: 'scene3d', params })
@@ -205,20 +238,20 @@ const SCENE_PRESETS = [
  * (dt) — the one engine the audit flagged as non-seamless; fine as an
  * ambient generator. */
 const MESH_LOOP = {
-  id: 'meshgradient', label: 'Mesh gradient', group: 'gradients', kind: 'engine', engine: 'mesh',
+  id: 'meshgradient', label: 'Mesh gradient', group: 'gradients', kind: 'engine', engine: 'mesh', orbit: true,
   drive: 'dt', duration: 8,
   params: [
-    range('seed', 'Seed', 1, 40, 1, 7),
-    { key: 'shape', label: 'Shape', type: 'select', default: 'sphere', options: MESH_SHAPES.map((s) => ({ value: s, label: s === 'sphere' ? 'Sphere' : 'Plane' })) },
-    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: MESH_PALETTES.map((p) => ({ value: p.id, label: p.label })) },
-    range('hueShift', 'Hue shift', 0, 360, 1, 0),
-    { key: 'driver', label: 'Driver', type: 'select', default: 0, options: MESH_DRIVERS.map((d) => ({ value: d.id, label: d.label })), numeric: true },
-    range('distort', 'Distort', 0.1, 1.2, 0.02, 0.5),
-    range('glow', 'Glow', 0, 1, 0.02, 0.6),
-    range('grain', 'Grain', 0, 0.2, 0.005, 0.06),
-    range('bgAmount', 'Backdrop', 0, 1, 0.02, 0.85),
-    { key: 'bgStyle', label: 'Backdrop style', type: 'select', default: 0, options: MESH_BG_STYLES.map((b) => ({ value: b.id, label: b.label })), numeric: true },
-    range('speed', 'Speed', 0.2, 3, 0.05, 1),
+    range('seed', 'Seed', 1, 40, 1, 7, { section: 'Field' }),
+    { key: 'shape', label: 'Shape', type: 'select', default: 'sphere', options: MESH_SHAPES.map((s) => ({ value: s, label: s === 'sphere' ? 'Sphere' : 'Plane' })), section: 'Field' },
+    range('distort', 'Distort', 0.1, 1.2, 0.02, 0.5, { section: 'Field' }),
+    range('glow', 'Glow', 0, 1, 0.02, 0.6, { section: 'Field' }),
+    range('grain', 'Grain', 0, 0.2, 0.005, 0.06, { section: 'Field' }),
+    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: MESH_PALETTES.map((p) => ({ value: p.id, label: p.label })), section: 'Color' },
+    range('hueShift', 'Hue shift', 0, 360, 1, 0, { section: 'Color' }),
+    range('bgAmount', 'Backdrop', 0, 1, 0.02, 0.85, { section: 'Backdrop' }),
+    { key: 'bgStyle', label: 'Backdrop style', type: 'select', default: 0, options: MESH_BG_STYLES.map((b) => ({ value: b.id, label: b.label })), numeric: true, section: 'Backdrop' },
+    { key: 'driver', label: 'Driver', type: 'select', default: 0, options: MESH_DRIVERS.map((d) => ({ value: d.id, label: d.label })), numeric: true, tab: 'anim', section: 'Motion' },
+    range('speed', 'Speed', 0.2, 3, 0.05, 1, ANIM),
   ],
 }
 const MP = (id, label, params) => ({ id: `mesh-${id}`, label, loop: 'meshgradient', sub: 'Mesh', params })
@@ -233,75 +266,89 @@ const MESH_PRESETS = [
 
 /* ── Wave 2b — Forms / Environments / Ribbon (playhead engines) ──────── */
 const FORMS_LOOP = {
-  id: 'forms3d', label: 'Forms', group: 'forms', kind: 'engine', engine: 'forms',
+  id: 'forms3d', label: 'Forms', group: 'forms', kind: 'engine', engine: 'forms', orbit: true, bgToggle: true,
   drive: 'seek', duration: 8,
   params: [
     { key: 'form', label: 'Form', type: 'select', default: 'helix', options: opts(FORMS) },
-    range('samples', 'Density', 8, 60, 1, 30),
-    range('cycles', 'Cycles', 1, 6, 1, 2),
-    range('amp', 'Amplitude', 0, 1.5, 0.05, 0.35),
-    range('pointSize', 'Point size', 0.01, 0.2, 0.005, 0.05),
-    range('turns', 'Turns', 0.5, 6, 0.1, 2.5),
-    range('radius', 'Radius', 0.2, 2, 0.05, 0.85),
-    range('height', 'Height', 0.5, 4, 0.1, 2.4),
-    { key: 'spin', label: 'Spin', type: 'toggle', default: false },
-    range('spinSpeed', 'Spin speed', 0, 3, 0.05, 1),
-    range('fov', 'FOV', 15, 90, 1, 40),
-    { key: 'formColor', label: 'Color', type: 'color', role: 'fg', default: '#e5dfcf' },
-    { key: 'accent', label: 'Accent', type: 'color', role: 'accent', default: '#8b8fd6' },
+    /* Per formsShapes.writePositions: turns/radius/height are helix-only;
+     * amp animates the grid creatures (torus + helix ignore it); torus is the
+     * one static form (its fn ignores ph, so cycles does nothing there). */
+    ...tag({ section: 'Geometry' }, [
+      range('samples', 'Density', 8, 60, 1, 30),
+      { ...range('cycles', 'Cycles', 1, 6, 1, 2), when: (l) => (l.form ?? 'helix') !== 'torus' },
+      { ...range('amp', 'Amplitude', 0, 1.5, 0.05, 0.35), when: (l) => !['helix', 'torus'].includes(l.form ?? 'helix') },
+      range('pointSize', 'Point size', 0.01, 0.2, 0.005, 0.05),
+      { ...range('turns', 'Turns', 0.5, 6, 0.1, 2.5), when: (l) => (l.form ?? 'helix') === 'helix' },
+      { ...range('radius', 'Radius', 0.2, 2, 0.05, 0.85), when: (l) => (l.form ?? 'helix') === 'helix' },
+      { ...range('height', 'Height', 0.5, 4, 0.1, 2.4), when: (l) => (l.form ?? 'helix') === 'helix' },
+    ]),
+    { key: 'spin', label: 'Spin', type: 'toggle', default: false, tab: 'anim', section: 'Motion' },
+    { ...range('spinSpeed', 'Spin speed', 0, 3, 0.05, 1, ANIM), when: (l) => !!l.spin },
+    range('fov', 'FOV', 15, 90, 1, 40, { section: 'Camera' }),
+    { key: 'formColor', label: 'Color', type: 'color', role: 'fg', default: '#e5dfcf', section: 'Color' },
+    { key: 'accent', label: 'Accent', type: 'color', role: 'accent', default: '#8b8fd6', section: 'Color' },
   ],
 }
 const FORMS_PRESETS = FORMS.map((f) =>
   ({ id: `forms-${f.id}`, label: f.label, loop: 'forms3d', params: { form: f.id } }))
 
 const ENV_LOOP = {
-  id: 'environment', label: 'Environment', group: 'environment', kind: 'engine', engine: 'environment',
+  id: 'environment', label: 'Environment', group: 'environment', kind: 'engine', engine: 'environment', orbit: true, bgToggle: true,
   drive: 'seek', duration: 8,
   params: [
     { key: 'env', label: 'Scene', type: 'select', default: 'mountain', options: opts(ENVIRONMENTS) },
-    range('samples', 'Density', 16, 96, 1, 48),
-    range('cycles', 'Cycles', 1, 6, 1, 2),
-    range('amp', 'Amplitude', 0, 1.5, 0.05, 0.5),
-    { key: 'spin', label: 'Spin', type: 'toggle', default: false },
-    range('spinSpeed', 'Spin speed', 0, 3, 0.05, 1),
-    range('fov', 'FOV', 15, 90, 1, 45),
-    { key: 'formColor', label: 'Color', type: 'color', role: 'fg', default: '#e5dfcf' },
-    { key: 'accent', label: 'Accent', type: 'color', role: 'accent', default: '#8b8fd6' },
+    range('samples', 'Density', 16, 96, 1, 48, { section: 'Geometry' }),
+    range('cycles', 'Cycles', 1, 6, 1, 2, { section: 'Geometry' }),
+    range('amp', 'Amplitude', 0, 1.5, 0.05, 0.5, { section: 'Geometry' }),
+    /* The engine suppresses auto-rotate for wrapped scenes (camera sits inside
+     * the tunnel) — see isWrapped() in envScenes.js. */
+    { key: 'spin', label: 'Spin', type: 'toggle', default: false, tab: 'anim', section: 'Motion', when: (l) => (l.env ?? 'mountain') !== 'tunnel' },
+    { ...range('spinSpeed', 'Spin speed', 0, 3, 0.05, 1, ANIM), when: (l) => !!l.spin && (l.env ?? 'mountain') !== 'tunnel' },
+    range('fov', 'FOV', 15, 90, 1, 45, { section: 'Camera' }),
+    { key: 'formColor', label: 'Color', type: 'color', role: 'fg', default: '#e5dfcf', section: 'Color' },
+    { key: 'accent', label: 'Accent', type: 'color', role: 'accent', default: '#8b8fd6', section: 'Color' },
   ],
 }
 const ENV_PRESETS = ENVIRONMENTS.map((e) =>
   ({ id: `env-${e.id}`, label: e.label, loop: 'environment', params: { env: e.id } }))
 
 const RIBBON_LOOP = {
-  id: 'ribbon', label: 'Ribbon', group: 'ribbon', kind: 'engine', engine: 'ribbon',
+  id: 'ribbon', label: 'Ribbon', group: 'ribbon', kind: 'engine', engine: 'ribbon', orbit: true, bgToggle: true,
   drive: 'seek', duration: 12,
   params: [
     /* geometry (rebuilds the swept ribbon) */
-    range('seed', 'Seed', 1, 40, 1, 1),
-    range('loops', 'Loops', 1, 6, 1, 3),
-    range('height', 'Height', 0.5, 4, 0.1, 2.2),
-    range('gap', 'Gap', 0.3, 1.6, 0.02, 0.92),
-    range('depth', 'Depth', 0, 1, 0.02, 0.35),
-    range('curl', 'Curl', 0, 3, 0.05, 1),
-    range('width', 'Width', 0.1, 1.2, 0.02, 0.5),
-    /* look */
-    { key: 'materialType', label: 'Material', type: 'select', default: 'glass',
-      options: [{ value: 'glass', label: 'Glass' }, { value: 'chrome', label: 'Chrome' }] },
-    { key: 'ribbonColor', label: 'Color', type: 'color', role: 'fg', default: '#cfe0ff' },
-    range('roughness', 'Roughness', 0, 1, 0.02, 0.05),
-    range('metalness', 'Metalness', 0, 1, 0.02, 1),
-    range('ior', 'IOR', 1, 2.4, 0.01, 1.55),
-    range('dispersion', 'Dispersion', 0, 20, 0.5, 10),
-    { key: 'background', label: 'Backdrop', type: 'color', role: 'bg', default: '#000000' },
+    ...tag({ section: 'Geometry' }, [
+      range('seed', 'Seed', 1, 40, 1, 1),
+      range('loops', 'Loops', 1, 6, 1, 3),
+      range('height', 'Height', 0.5, 4, 0.1, 2.2),
+      range('gap', 'Gap', 0.3, 1.6, 0.02, 0.92),
+      range('depth', 'Depth', 0, 1, 0.02, 0.35),
+      range('curl', 'Curl', 0, 3, 0.05, 1),
+      range('width', 'Width', 0.1, 1.2, 0.02, 0.5),
+    ]),
+    /* look — applyMaterialProps splits per material: metalness is chrome-only,
+     * ior/dispersion are glass-only. */
+    ...tag({ section: 'Look' }, [
+      { key: 'materialType', label: 'Material', type: 'select', default: 'glass',
+        options: [{ value: 'glass', label: 'Glass' }, { value: 'chrome', label: 'Chrome' }] },
+      { key: 'ribbonColor', label: 'Color', type: 'color', role: 'fg', default: '#cfe0ff' },
+      range('roughness', 'Roughness', 0, 1, 0.02, 0.05),
+      { ...range('metalness', 'Metalness', 0, 1, 0.02, 1), when: (l) => l.materialType === 'chrome' },
+      { ...range('ior', 'IOR', 1, 2.4, 0.01, 1.55), when: (l) => (l.materialType ?? 'glass') === 'glass' },
+      { ...range('dispersion', 'Dispersion', 0, 20, 0.5, 10), when: (l) => (l.materialType ?? 'glass') === 'glass' },
+      { key: 'background', label: 'Backdrop', type: 'color', role: 'bg', default: '#000000' },
+    ]),
     /* motion + post */
-    range('flow', 'Flow', 0, 1, 0.01, 0.6),
-    { key: 'cameraOrbit', label: 'Camera orbit', type: 'toggle', default: false },
-    range('orbitSpeed', 'Orbit speed', 0, 3, 0.05, 0.6),
-    range('fov', 'FOV', 15, 90, 1, 36),
-    range('aberration', 'Aberration', 0, 3, 0.05, 1),
-    range('bloom', 'Bloom', 0, 2, 0.05, 0),
-    range('vignette', 'Vignette', 0, 1, 0.02, 0.35),
-    range('grain', 'Grain', 0, 0.2, 0.005, 0),
+    range('flow', 'Flow', 0, 1, 0.01, 0.6, ANIM),
+    { key: 'cameraOrbit', label: 'Camera orbit', type: 'toggle', default: false, tab: 'anim', section: 'Camera' },
+    { ...range('orbitSpeed', 'Orbit speed', 0, 3, 0.05, 0.6, CAM_ANIM), when: (l) => !!l.cameraOrbit },
+    range('fov', 'FOV', 15, 90, 1, 36, { section: 'Camera' }),
+    ...tag({ section: 'Post' }, [
+      range('aberration', 'Aberration', 0, 3, 0.05, 1),
+      range('bloom', 'Bloom', 0, 2, 0.05, 0),
+      range('vignette', 'Vignette', 0, 1, 0.02, 0.35),
+      range('grain', 'Grain', 0, 0.2, 0.005, 0),
+    ]),
   ],
 }
 const RP = (id, label, params) => ({ id: `ribbon-${id}`, label, loop: 'ribbon', params })

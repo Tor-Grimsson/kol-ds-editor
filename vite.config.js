@@ -19,4 +19,19 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@kolkrabbi/kol-loader'],
   },
+  // /media → the kol-media CDN, same-origin so photo filters can getImageData
+  // without tainting the canvas (the CDN sends NO CORS headers; a cross-origin
+  // load poisons every filtered/export path). Labs model (kol-labs-single).
+  // Prod note: a static build needs an equivalent rewrite at the host, e.g.
+  // vercel.json { "source": "/media/:path*", "destination": "https://media.kolkrabbi.io/:path*" }.
+  server: {
+    proxy: {
+      '/media': { target: 'https://media.kolkrabbi.io', changeOrigin: true, rewrite: (p) => p.replace(/^\/media/, '') },
+    },
+  },
+  preview: {
+    proxy: {
+      '/media': { target: 'https://media.kolkrabbi.io', changeOrigin: true, rewrite: (p) => p.replace(/^\/media/, '') },
+    },
+  },
 })

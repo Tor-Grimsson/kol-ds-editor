@@ -11,6 +11,7 @@ import { scalePathNodes, shiftNode, rotatePathNodes, normalizePath, normalizePat
 import { shapeToPathNodes } from './shape-math'
 import { booleanCombine, isBooleanable } from './boolean-ops'
 import { presetById, presetParams } from '../../loops/registry'
+import { kineticPresetById, presetComp } from '../../kinetic/presets'
 
 /* Layer types that own a `color` (and may own a `stroke`). Single source
  * of truth — `useColorTarget` and the inspector both consult this set
@@ -172,6 +173,7 @@ export const LAYER_TYPES = [
   { id: 'shape',      label: 'Shape' },
   { id: 'text',       label: 'Text' },
   { id: 'loop',       label: 'Loop' },
+  { id: 'kinetic',    label: 'Kinetic type' },
 ]
 
 const layerDefaults = (type) => {
@@ -196,6 +198,17 @@ const layerDefaults = (type) => {
         presetLabel: preset.label,
         loopId:      preset.loop,
         ...presetParams(preset),
+      })
+    }
+    /* Kinetic-type layer — a labs TYPE composition on the KineticType engine
+     * (src/kinetic). The composition rides OPAQUELY on `layer.comp` (like
+     * loop `forms`) — no flat param spread, no bind dots on its internals. */
+    case 'kinetic': {
+      const preset = kineticPresetById()   /* first preset (Sunburst) */
+      return placed(600, 600, {
+        presetId:    preset.id,
+        presetLabel: preset.label,
+        comp:        presetComp(preset),
       })
     }
     case 'text':       return placed(600, 120, { ...TEXT_DEFAULTS, text: 'New text', color: 'palette:dark' })
@@ -233,6 +246,15 @@ export function ComposeStateProvider({ children }) {
   /* ─── Frame: grid backdrop ─── */
   const [showGrid, setShowGrid] = useState(true)
   const toggleGrid = useCallback(() => setShowGrid((g) => !g), [])
+  const [showRulers, setShowRulers] = useState(true)
+  const toggleRulers = useCallback(() => setShowRulers((r) => !r), [])
+
+  /* ─── Frame: ruler guides ───
+   * Figma-style guides dragged off the rulers. `h` = horizontal guide
+   * y-positions, `v` = vertical guide x-positions (virtual px). Workspace
+   * chrome, not composition — deliberately NOT history-tracked (undo/redo
+   * never touches guides). Persisted in the draft like showRulers. */
+  const [guides, setGuides] = useState({ h: [], v: [] })
 
   /* ─── Frame: view ─── */
   /* 'single' renders the canvas at the active aspect.
@@ -1038,6 +1060,8 @@ export function ComposeStateProvider({ children }) {
         if (typeof draft.canvasW === 'number') setCanvasW(draft.canvasW)
         if (typeof draft.canvasH === 'number') setCanvasH(draft.canvasH)
         if (typeof draft.showGrid === 'boolean') setShowGrid(draft.showGrid)
+        if (typeof draft.showRulers === 'boolean') setShowRulers(draft.showRulers)
+        if (draft.guides && Array.isArray(draft.guides.h) && Array.isArray(draft.guides.v)) setGuides(draft.guides)
         if (draft.canvas) {
           if (draft.canvas.fill !== undefined)        setCanvasFill(draft.canvas.fill)
           if (typeof draft.canvas.fillOpacity === 'number') setCanvasFillOpacity(draft.canvas.fillOpacity)
@@ -1045,7 +1069,11 @@ export function ComposeStateProvider({ children }) {
         if (draft.palette) {
           if (draft.palette.poolId) setPoolId(draft.palette.poolId)
           if (draft.palette.modeId) setModeId(draft.palette.modeId)
-          if (Array.isArray(draft.palette.colors)) setColors(draft.palette.colors)
+          /* Migration: drafts saved while the palette tokens were broken
+           * (phantom token names) carry six IDENTICAL colors — discard those
+           * so the real pool defaults show instead of the collapsed set. */
+          const dc = draft.palette.colors
+          if (Array.isArray(dc) && !dc.every((c) => c === dc[0])) setColors(dc)
           if (Array.isArray(draft.palette.locks))  setLocks(draft.palette.locks)
         }
         if (draft.paint) {
@@ -1070,7 +1098,7 @@ export function ComposeStateProvider({ children }) {
         }
         const draft = {
           aspect,
-          canvasW, canvasH, showGrid,
+          canvasW, canvasH, showGrid, showRulers, guides,
           layers,
           canvas:  { fill: canvasFill, fillOpacity: canvasFillOpacity },
           palette: { poolId, modeId, colors, locks },
@@ -1080,7 +1108,7 @@ export function ComposeStateProvider({ children }) {
       } catch { /* quota / disabled storage: ignore */ }
     }, 500)
     return () => clearTimeout(t)
-  }, [layers, aspect, canvasW, canvasH, showGrid, canvasFill, canvasFillOpacity, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
+  }, [layers, aspect, canvasW, canvasH, showGrid, showRulers, guides, canvasFill, canvasFillOpacity, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
 
   /* Move a layer so it ends up at array position `toIndex` post-move. */
   const moveLayer = useCallback((id, toIndex) => {
@@ -1110,6 +1138,8 @@ export function ComposeStateProvider({ children }) {
     aspect, setAspect,
     canvasW, canvasH, canvasRatio, setCanvasSize,
     showGrid, setShowGrid, toggleGrid,
+    showRulers, toggleRulers,
+    guides, setGuides,
     view, setView,
 
     /* canvas fill (bottom-most "layer") */

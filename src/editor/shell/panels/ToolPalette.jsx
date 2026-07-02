@@ -244,7 +244,7 @@ export default function ToolPalette() {
       <ActionButton
         icon="crop"
         label="Crop image"
-        disabled={selectedLayer?.type !== 'photo' || selectedLayer.locked}
+        disabled={selectedLayer?.type !== 'photo' || selectedLayer.srcType === 'video' || selectedLayer.locked}
         onClick={() => window.dispatchEvent(new CustomEvent('kol:enter-crop', { detail: selectedLayer.id }))}
       />
       <ActionButton

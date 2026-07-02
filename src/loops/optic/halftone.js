@@ -172,12 +172,12 @@ export default {
     { key: 'shape', label: 'Cell shape', type: 'select', options: SHAPE_OPTIONS, default: 'dot' },
     { key: 'density', label: 'Density', type: 'range', min: 4, max: 80, step: 1, default: 34 },
     { key: 'dotScale', label: 'Dot scale', type: 'range', min: 0.2, max: 2, step: 0.05, default: 1 },
-    { key: 'fieldScale', label: 'Field scale', type: 'range', min: 0.2, max: 4, step: 0.05, default: 1 },
+    { key: 'fieldScale', label: 'Field scale', type: 'range', min: 0.2, max: 4, step: 0.05, default: 1, when: (l) => (l.field ?? 'radial') !== 'radial' },
     { key: 'contrast', label: 'Contrast', type: 'range', min: 0.3, max: 4, step: 0.05, default: 1 },
     { key: 'rotate', label: 'Rotate', type: 'range', min: 0, max: 360, step: 1, default: 0 },
     { key: 'invert', label: 'Invert', type: 'toggle', default: false },
-    { key: 'flow', label: 'Flow · cycles', type: 'range', min: 0, max: 4, step: 1, default: 1, noRandom: true },
-    { key: 'spin', label: 'Spin · turns', type: 'range', min: -2, max: 2, step: 1, default: 0, noRandom: true },
+    { key: 'flow', label: 'Flow · cycles', type: 'range', min: 0, max: 4, step: 1, default: 1, noRandom: true, tab: 'anim', section: 'Motion' },
+    { key: 'spin', label: 'Spin · turns', type: 'range', min: -2, max: 2, step: 1, default: 0, noRandom: true, tab: 'anim', section: 'Motion' },
   ],
   draw(ctx, u, w, h, p) {
     renderHalftone(ctx, u, w, h, p)

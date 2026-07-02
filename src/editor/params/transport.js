@@ -17,6 +17,7 @@ let t           = 0
 let playing     = false
 let loopSeconds = 4
 let mouse       = { x: 0.5, y: 0.5 }
+let stage       = null   /* pointer in virtual-canvas px (CanvasArea feeds it) */
 let version     = 0
 
 const subs   = new Set()
@@ -61,7 +62,13 @@ export const transport = {
   isPlaying() { return playing },
   getLoopSeconds() { return loopSeconds },
   getT() { return t },
-  getCtx() { return { t, mouse } },
+  getCtx() { return { t, mouse, stage } },
+  /* Stage pointer in virtual px — feeds the layer-local pointer sources.
+   * Notifies like mousemove so paused-but-bound layers track it. */
+  setStagePointer(x, y) {
+    stage = x == null ? null : { x, y }
+    if (subs.size > 0) notify()
+  },
 }
 
 function subscribe(cb)   { subs.add(cb); ensureRaf(); return () => subs.delete(cb) }

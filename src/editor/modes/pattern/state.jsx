@@ -12,14 +12,14 @@ import { newRule, randomRule } from './RuleRow'
  * the rules panel can render independently inside EditorShell.
  */
 
-const DEFAULT_COLOR_TOKENS = { color: '--brand-blue-400', background: '--cream-100' }
+const DEFAULT_COLOR_TOKENS = { color: '--kol-color-blue-400', background: '--kol-color-cream-100' }
 
 /* Random-palette tokens — resolve at draw time so the random pool tracks
  * any KOL token edits in kol-color.css. Mirrors combo-lab/pools.js. */
 const RANDOM_PALETTE_TOKENS = [
-  '--brand-blue-400', '--brand-blue-500', '--grey-400', '--grey-300', '--grey-200', '--grey-50',
-  '--cream-100',      '--cream-400',      '--cream-500',
-  '--brand-red-200',  '--brand-red-300',  '--brand-red-400',
+  '--kol-color-blue-400', '--kol-color-blue-500', '--grey-400', '--grey-300', '--grey-200', '--grey-50',
+  '--kol-color-cream-100',      '--kol-color-cream-400',      '--kol-color-cream-500',
+  '--kol-color-red-200',  '--kol-color-red-300',  '--kol-color-red-400',
 ]
 const buildRandomPalette = () => RANDOM_PALETTE_TOKENS.map(resolveCssVar).filter(Boolean)
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)]

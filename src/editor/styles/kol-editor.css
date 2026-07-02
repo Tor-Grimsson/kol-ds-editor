@@ -29,6 +29,13 @@
   user-select: text;
   -webkit-user-select: text;
 }
+/* Browser default focus ring (Firefox draws a double outline on inputs) —
+   the DS .kol-control shell carries its own focus affordance (border
+   reveal), so the UA ring only stacks noise on top. */
+.kol-editor-shell input:focus-visible,
+.kol-editor-shell textarea:focus-visible {
+  outline: none;
+}
 
 .kol-editor-grid {
   display: grid;
@@ -193,8 +200,10 @@
   padding: 0;
 }
 .kol-compose-layer-collapse:hover { color: var(--kol-surface-on-primary); }
-/* Indent nested rows so the parent-child hierarchy reads visually. */
-.kol-compose-layer-nest { padding-left: 16px; }
+/* Indent nested rows so the parent-child hierarchy reads visually — one
+   icon slot (18px icon + 8px gap), so a child's type icon aligns under
+   its parent's name. */
+.kol-compose-layer-nest { padding-left: 26px; }
 
 .kol-compose-layer-row {
   display: flex;
@@ -208,12 +217,16 @@
   cursor: grab;
   position: relative;
 }
-.kol-compose-layer-row:hover,
-.kol-compose-layer-row.is-active {
+.kol-compose-layer-row:hover {
   background: var(--kol-fg-04);
   color: var(--kol-surface-on-primary);
 }
-.kol-compose-layer-row.is-hidden  { opacity: 0.45; }
+.kol-compose-layer-row.is-active {
+  background: var(--kol-surface-secondary);
+  color: var(--kol-fg-emphasis);
+}
+/* Hidden layer — dim the icon+name only; the slashed eye stays legible. */
+.kol-compose-layer-row.is-hidden .kol-compose-layer-main { opacity: 0.4; }
 .kol-compose-layer-row.is-dragging { opacity: 0.4; cursor: grabbing; }
 .kol-compose-layer-row[draggable]:active { cursor: grabbing; }
 

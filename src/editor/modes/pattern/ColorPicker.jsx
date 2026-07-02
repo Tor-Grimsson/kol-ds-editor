@@ -23,8 +23,8 @@ const TAB_OPTIONS = [
 ]
 
 const ROW_WARM_TOKENS = [
-  '--cream-100', '--cream-200', '--cream-300', '--cream-400', '--cream-500',
-  '--brand-red-100', '--brand-red-200', '--brand-red-300', '--brand-red-400', '--brand-red-500',
+  '--kol-color-cream-100', '--kol-color-cream-200', '--kol-color-cream-300', '--kol-color-cream-400', '--kol-color-cream-500',
+  '--kol-color-red-100', '--kol-color-red-200', '--kol-color-red-300', '--kol-color-red-400', '--kol-color-red-500',
 ]
 
 const ROW_GREY_TOKENS = [

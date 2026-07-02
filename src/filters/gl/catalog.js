@@ -32,29 +32,33 @@ const trails = {
     range('hue', 'Hue', 0, 2, 0.02, 0),
     range('sat', 'Saturation', 0, 3, 0.05, 1),
     range('gain', 'Gain', 0.2, 2, 0.05, 1),
-    SPEED,
+    /* the clock only feeds the hue cycle (feedback decay is per-frame) */
+    { ...SPEED, when: (l) => (l.hue ?? 0) > 0 },
   ],
 }
 
 const scan = {
-  id: 'gl-scan', label: 'Rutt-Etra', kind: 'engine', engine: 'scan',
+  id: 'gl-scan', label: 'Rutt-Etra', kind: 'engine', engine: 'scan', orbit: true,
   params: [
     range('lines', 'Lines', 40, 300, 1, 140),
     range('cols', 'Columns', 40, 400, 1, 220),
     range('displace', 'Displace', 0, 2.5, 0.05, 1),
     toggle('mono', 'Mono'),
-    { key: 'tint', label: 'Tint', type: 'color', default: '#9fe7ff' },
+    /* tint only mixes in on the mono path */
+    { key: 'tint', label: 'Tint', type: 'color', default: '#9fe7ff', when: (l) => !!l.mono },
     range('opacity', 'Line opacity', 0.05, 1, 0.05, 1),
-    range('yaw', 'Yaw', -3.14, 3.14, 0.02, 0),
-    range('pitch', 'Pitch', -1.4, 1.4, 0.02, 0.4),
-    range('dist', 'Distance', 1.5, 8, 0.1, 3),
+    /* manual rig vs motion preset — each side yields to the other */
+    { ...range('yaw', 'Yaw', -3.14, 3.14, 0.02, 0), when: (l) => !l.cameraMotion },
+    { ...range('pitch', 'Pitch', -1.4, 1.4, 0.02, 0.4), when: (l) => !l.cameraMotion },
+    { ...range('dist', 'Distance', 1.5, 8, 0.1, 3), when: (l) => !l.cameraMotion },
     range('fov', 'FOV', 20, 90, 1, 45),
     toggle('cameraMotion', 'Camera motion'),
-    select('motionPreset', 'Motion', 'orbit',
-      [opt('orbit', 'Orbit'), opt('spin', 'Spin'), opt('rock', 'Rock'), opt('rise', 'Rise'), opt('push', 'Push'), opt('pull', 'Pull')]),
-    range('motionSpeed', 'Motion speed', 0.02, 1.5, 0.02, 0.3),
+    { ...select('motionPreset', 'Motion', 'orbit',
+      [opt('orbit', 'Orbit'), opt('spin', 'Spin'), opt('rock', 'Rock'), opt('rise', 'Rise'), opt('push', 'Push'), opt('pull', 'Pull')]), when: (l) => !!l.cameraMotion },
+    { ...range('motionSpeed', 'Motion speed', 0.02, 1.5, 0.02, 0.3), when: (l) => !!l.cameraMotion },
     { key: 'bg', label: 'Backdrop', type: 'color', role: 'bg', default: '#0b0e13' },
-    SPEED,
+    /* the clock only drives the camera-motion presets */
+    { ...SPEED, when: (l) => !!l.cameraMotion },
   ],
 }
 
@@ -66,7 +70,8 @@ const slitscan = {
   params: [
     select('mode', 'Mode', 'chop', [opt('chop', 'Chop'), opt('finish', 'Finish')]),
     select('axis', 'Axis', 'horizontal', [opt('horizontal', 'Horizontal'), opt('vertical', 'Vertical')]),
-    range('slit', 'Slit', 0, 1, 0.01, 0.5),
+    /* the fixed slit line only exists in finish mode (chop writes the live frame) */
+    { ...range('slit', 'Slit', 0, 1, 0.01, 0.5), when: (l) => l.mode === 'finish' },
     range('scroll', 'Scroll', 0, 4, 0.05, 1),
     range('smooth', 'Smooth', 0, 1, 0.02, 0),
     range('orig', 'Original mix', 0, 1, 0.02, 0),
@@ -80,7 +85,7 @@ const disco = {
   params: [
     select('mirror', 'Mirror', 'kaleido',
       [opt('none', 'None'), opt('kaleido', 'Kaleido'), opt('mirrorX', 'Mirror X'), opt('mirrorY', 'Mirror Y'), opt('quad', 'Quad')]),
-    range('segments', 'Segments', 1, 16, 1, 6),
+    { ...range('segments', 'Segments', 1, 16, 1, 6), when: (l) => (l.mirror ?? 'kaleido') === 'kaleido' },
     range('twist', 'Twist', -3.14, 3.14, 0.02, 0),
     range('originX', 'Origin X', 0, 1, 0.01, 0.5),
     range('originY', 'Origin Y', 0, 1, 0.01, 0.5),
@@ -89,7 +94,7 @@ const disco = {
     range('rotate', 'Rotate', -3.14, 3.14, 0.02, 0),
     range('spin', 'Spin', -2, 2, 0.05, 0.1),
     range('pulse', 'Pulse', 0, 1, 0.02, 0),
-    range('pulseRate', 'Pulse rate', 0, 4, 0.05, 0.5),
+    { ...range('pulseRate', 'Pulse rate', 0, 4, 0.05, 0.5), when: (l) => (l.pulse ?? 0) > 0 },
     range('hue', 'Hue', 0, 2, 0.02, 0.3),
     range('sat', 'Saturation', 0, 3, 0.05, 1),
     range('posterize', 'Posterize', 0, 12, 1, 0),
@@ -107,12 +112,14 @@ const distort = {
     range('radius', 'Radius', 0.02, 0.5, 0.01, 0.18),
     range('decay', 'Decay', 0.8, 0.99, 0.005, 0.94),
     range('rgbShift', 'RGB shift', 0, 0.1, 0.002, 0.03),
-    range('px', 'Pointer X', 0, 1, 0.01, 0.5),
-    range('py', 'Pointer Y', 0, 1, 0.01, 0.5),
+    /* an active auto path re-targets the point every frame — px/py only steer
+     * with the path off, and the path knobs only matter with it on */
+    { ...range('px', 'Pointer X', 0, 1, 0.01, 0.5), when: (l) => (l.motionShape ?? 'orbit') === 'off' },
+    { ...range('py', 'Pointer Y', 0, 1, 0.01, 0.5), when: (l) => (l.motionShape ?? 'orbit') === 'off' },
     select('motionShape', 'Auto path', 'orbit',
       [opt('off', 'Off'), opt('orbit', 'Orbit'), opt('figure8', 'Figure 8'), opt('lissajous', 'Lissajous'), opt('sweep', 'Sweep'), opt('spiral', 'Spiral')]),
-    range('motionSpeed', 'Path speed', 0, 4, 0.05, 1),
-    range('motionSize', 'Path size', 0, 1, 0.02, 0.6),
+    { ...range('motionSpeed', 'Path speed', 0, 4, 0.05, 1), when: (l) => (l.motionShape ?? 'orbit') !== 'off' },
+    { ...range('motionSize', 'Path size', 0, 1, 0.02, 0.6), when: (l) => (l.motionShape ?? 'orbit') !== 'off' },
     SPEED,
   ],
 }
@@ -124,7 +131,8 @@ const lens = {
       [opt('glass', 'Glass'), opt('ripple', 'Ripple'), opt('ice', 'Ice'), opt('mirror', 'Mirror'), opt('kaleido', 'Kaleido'), opt('waves', 'Waves')]),
     select('shape', 'Shape', 'panel', [opt('panel', 'Panel'), opt('circle', 'Circle')]),
     range('size', 'Size', 0.05, 0.7, 0.01, 0.34),
-    range('radius', 'Corner radius', 0, 0.3, 0.005, 0.08),
+    /* the SDF's circle branch has no corners */
+    { ...range('radius', 'Corner radius', 0, 0.3, 0.005, 0.08), when: (l) => (l.shape ?? 'panel') !== 'circle' },
     range('glassX', 'Lens X', 0, 1, 0.01, 0.5),
     range('glassY', 'Lens Y', 0, 1, 0.01, 0.5),
     range('magnify', 'Magnify', 0, 1, 0.02, 0.22),
@@ -135,9 +143,10 @@ const lens = {
     range('reflect', 'Reflect', 0, 1.5, 0.05, 0.1),
     range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5),
     range('lightAngle', 'Light angle', 0, 360, 1, 45),
-    { key: 'tint', label: 'Tint', type: 'color', default: '#ffffff' },
     range('tintAmt', 'Tint amount', 0, 1, 0.02, 0),
-    { key: 'bg', label: 'Backdrop', type: 'color', role: 'bg', default: '#06070b' },
+    { key: 'tint', label: 'Tint', type: 'color', default: '#ffffff', when: (l) => (l.tintAmt ?? 0) > 0 },
+    /* NB: the engine's `bg` only paints contain-mode bars, and `fit` is pinned
+     * to cover here — param removed as unreachable (audit). */
     range('flow', 'Flow', 0, 2.5, 0.05, 1),
   ],
 }

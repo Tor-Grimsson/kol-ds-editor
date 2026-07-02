@@ -11,6 +11,7 @@ export const TYPE_LABELS = {
   text:       'Text',
   group:      'Group',
   loop:       'Loop',
+  kinetic:    'Kinetic type',
 }
 
 export const SHAPE_KIND_LABELS = {
@@ -31,17 +32,22 @@ export function labelForLayer(layer) {
     return `Shape · ${kind}`
   }
   if (layer.type === 'loop' && layer.presetLabel) return `Loop · ${layer.presetLabel}`
+  if (layer.type === 'kinetic' && layer.presetLabel) return `Kinetic · ${layer.presetLabel}`
   return TYPE_LABELS[layer.type] ?? layer.type
 }
 
-/* Compact label for a layer-stack row. Shapes show their kind directly
- * (Figma idiom — "Rectangle" not "Shape · Rectangle"); text rows show
- * the actual content (truncated by the row's CSS). */
+/* Compact label for a layer-stack row. A user-set `layer.name` (inline
+ * rename in the layer stack) always wins, verbatim — no casing applied.
+ * Otherwise shapes show their kind directly (Figma idiom — "Rectangle"
+ * not "Shape · Rectangle"); text rows show the actual content (truncated
+ * by the row's CSS). */
 export function rowLabelForLayer(layer) {
+  if (layer.name) return layer.name
   if (layer.type === 'text') return layer.text || TYPE_LABELS.text
   if (layer.type === 'shape') {
     return SHAPE_KIND_LABELS[layer.kind ?? 'logo'] ?? TYPE_LABELS.shape
   }
   if (layer.type === 'loop') return layer.presetLabel || TYPE_LABELS.loop
+  if (layer.type === 'kinetic') return layer.presetLabel || TYPE_LABELS.kinetic
   return TYPE_LABELS[layer.type] ?? layer.type
 }

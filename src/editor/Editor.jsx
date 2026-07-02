@@ -1,5 +1,6 @@
 import { useParams, Navigate } from 'react-router-dom'
 import usePageTitle from '../components/hooks/usePageTitle'
+import EditorErrorBoundary from './EditorErrorBoundary'
 import { ToolProvider }       from './state/tools'
 import { useGlobalShortcuts } from './state/useGlobalShortcuts'
 import './registry/modes'      // side-effect: registers the mode features
@@ -32,5 +33,9 @@ export default function Editor() {
     (children, f) => (f.Provider ? <f.Provider>{children}</f.Provider> : children),
     <ActiveMode />,
   )
-  return <ToolProvider>{tree}</ToolProvider>
+  return (
+    <EditorErrorBoundary>
+      <ToolProvider>{tree}</ToolProvider>
+    </EditorErrorBoundary>
+  )
 }

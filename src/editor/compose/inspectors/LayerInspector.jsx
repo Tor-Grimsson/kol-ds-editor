@@ -1,59 +1,43 @@
-import { useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from 'react'
 import EditorButton from '../../components/EditorButton'
+import MediaPicker from '../../library/MediaPicker'
+import { proxied, isVideoType } from '../../library/mediaLibrary'
 import { Input } from '@kolkrabbi/kol-component'
 import { Dropdown } from '@kolkrabbi/kol-component'
 import { LabeledControl } from '@kolkrabbi/kol-component'
+import { Slider } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
 import { Icon } from '@kolkrabbi/kol-loader'
-import { useComposeState, resolveColor, COVER_TYPES } from '../state'
+import { useComposeState, COVER_TYPES } from '../state'
 import { scalePathNodes } from '../path-math'
 import EditorIcon from '../../icons/EditorIcon'
 import { useLayerEdit } from '../useLayerEdit'
 import { useColorTarget } from '../../color/useColorTarget'
-import { useGeneratorLibrary } from '../../library/LibraryProvider'
-import { usePatternState } from '../../modes/pattern/state'
-import { useTypeState } from '../../modes/type/state'
-import RuleRow, { newRule, randomRule } from '../../modes/pattern/RuleRow'
 import { ColorField } from './ColorField'
-import AutoControls from '../../params/AutoControls'
 import BindDot from '../../params/BindDot'
-import { SHAPE_SCHEMA } from '../../params/schemas/shape'
-import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
-import { TEXT_SCHEMA } from '../../params/schemas/text'
-import { PHOTO_SCHEMA } from '../../params/schemas/photo'
-import { schemaDefaults } from '../../params/schema'
-import { GROUPS, loopById, presetsInGroup } from '../../../loops/registry'
-import { presetParams } from '../../../loops/registry'
-import { FILTERS, filterById } from '../../../filters'
-import { themeParams } from '../../../loops/theme'
-import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
+import { BLEND_MODES } from '../LayerStack'
+import { filterById } from '../../../filters'
+import { GROUPS, loopById, loopBgToggleable, presetsInGroup, presetParams } from '../../../loops/registry'
 
 /**
- * LayerInspector — per-type knobs for the selected layer.
- *
- * Quick toggles (visibility / opacity / blend) live in the rail row's
- * expand panel — this inspector handles the heavier per-type controls
- * (position, color, content, source, etc.).
+ * LayerInspector — HIGH-LEVEL surface for the selected layer (Phase 6-A):
+ * position / transform / opacity / blend / paint / content source. Anything
+ * schema-driven or type-deep (shape kinds, typography, pattern surface,
+ * photo filters, loop controls) lives in the Parameters tab
+ * (ParametersPanel); the pointer rows below flip to it via `kol:open-params`
+ * (SelectionPalettePanel listens).
  */
-/* Shape kinds with a primitive vector outline — convertible to a path. */
-const PATHABLE_KINDS = ['rect', 'ellipse', 'triangle', 'polygon', 'star', 'line']
-
 export default function LayerInspector({ layer }) {
-  const { updateLayer, ungroupLayer, flipLayer, convertShapeToPath, palette } = useComposeState()
+  const { ungroupLayer, flipLayer, palette } = useComposeState()
   /* Color writes route through useColorTarget so the inspector, the picker,
    * the keymap, and the swatch stack all share one writer. Photoshop model:
    * writes always succeed, app-level paint state is the canonical source. */
   const target = useColorTarget()
 
   /* `coalesce` collapses slider drags + typed-input flurries into one undo
-   * entry per quiet period. Dropdowns/toggles also batch within 250ms but
-   * commit cleanly between distinct edits in practice. */
+   * entry per quiet period. */
   const edit = useLayerEdit(layer.id, { history: 'coalesce' })
   const setProp = edit.setProp
-
-  /* Per-field animate affordance (AutoControls' renderAnimate seam). */
-  const renderAnimate = (p) => <BindDot layer={layer} param={p} setProp={setProp} />
 
   return (
     <div className="flex flex-col gap-4">
@@ -80,7 +64,7 @@ export default function LayerInspector({ layer }) {
             <div className="flex items-center gap-1 shrink-0">
               <FlipButton axis="h" layer={layer} flipLayer={flipLayer} />
               <FlipButton axis="v" layer={layer} flipLayer={flipLayer} />
-              {layer.type === 'photo' && (
+              {layer.type === 'photo' && layer.srcType !== 'video' && (
                 <button
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('kol:enter-crop', { detail: layer.id }))}
@@ -93,6 +77,40 @@ export default function LayerInspector({ layer }) {
               )}
             </div>
           </div>
+        </LabeledControl>
+      )}
+
+      {/* Opacity + blend — the layer-stack expand panel's quick toggles,
+        * promoted to the inspector. Value renders as % in the slider's own
+        * readout (a LabeledControl hint sat flush against the label). */}
+      <LabeledControl label="Opacity">
+        <Slider
+          min={0} max={1} step={0.01}
+          value={layer.opacity ?? 1}
+          formatValue={(v) => `${Math.round(v * 100)}%`}
+          onChange={(v) => setProp('opacity', v)}
+        />
+      </LabeledControl>
+      <LabeledControl label="Blend">
+        <Dropdown
+          variant="subtle" size="sm" className="w-full"
+          options={BLEND_MODES}
+          value={layer.blend ?? 'normal'}
+          onChange={(v) => setProp('blend', v)}
+        />
+      </LabeledControl>
+
+      {/* Loop pickers + backdrop — surfaced here per review (also in
+        * Parameters); bg toggle hidden for loops whose bg feeds their
+        * color math. */}
+      {layer.type === 'loop' && <LoopPickerRows layer={layer} />}
+      {layer.type === 'loop' && loopBgToggleable(loopById(layer.loopId)) && (
+        <LabeledControl label="Background">
+          <ViewToggle
+            options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
+            viewMode={layer.bgOn === false ? 'off' : 'on'}
+            onViewChange={(v) => setProp('bgOn', v === 'on')}
+          />
         </LabeledControl>
       )}
 
@@ -119,28 +137,11 @@ export default function LayerInspector({ layer }) {
         </LabeledControl>
       )}
 
-      {layer.type === 'shape' && (
-        <>
-          <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-          {PATHABLE_KINDS.includes(layer.kind) && (
-            <EditorButton
-              variant="secondary" size="sm" className="w-full"
-              onClick={() => convertShapeToPath(layer.id)}
-              title="Convert the shape to an editable bezier path (one-way)"
-            >
-              Convert to path
-            </EditorButton>
-          )}
-        </>
-      )}
+      {/* Content source for photos stays here (it's what the layer IS);
+        * fit + filters moved to Parameters. */}
+      {layer.type === 'photo' && <ImageSource layer={layer} patch={edit.patch} />}
 
-      {layer.type === 'text' && (
-        <TextFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />
-      )}
-
-      {layer.type === 'pattern' && <PatternFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
-      {layer.type === 'photo' && <ImageFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
-      {layer.type === 'loop' && <LoopFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
+      <ParamsLink layer={layer} />
 
       {layer.type === 'group' && (
         <GroupFields layer={layer} ungroupLayer={ungroupLayer} />
@@ -149,23 +150,14 @@ export default function LayerInspector({ layer }) {
   )
 }
 
-/**
- * LoopFields — the loop layer's control surface (plan.md Phase 3): category →
- * preset picker (labs Loops page model: 2 groups × N presets), the loop's own
- * declared params auto-rendered (with bind dots — loop knobs are animatable
- * like any layer prop), theme recolour, randomise.
- */
-function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
-  const loop = loopById(layer.loopId)
+/* Loop Category + Preset pickers, surfaced in the Inspector (review r3 —
+ * the deep params stay in Parameters, but switching what plays shouldn't
+ * need a tab flip). Same preset semantics as LoopFields: picking one
+ * resets the loop's params to the preset's full set. */
+function LoopPickerRows({ layer }) {
+  const { updateLayer } = useComposeState()
   const group = layer.loopGroup ?? 'shape'
   const presets = presetsInGroup(group)
-  const groupOptions = GROUPS.map((g) => ({ value: g.id, label: g.label }))
-  /* Flat dropdown; `sub` buckets read as a label prefix (Dropdown has no
-   * option groups — revisit if it grows them). */
-  const presetOptions = presets.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))
-
-  /* Picking a preset resets the loop's params to the preset's full set
-   * (labs semantic — a preset is a curated starting point, not a patch). */
   const applyPreset = (preset, g = group) => {
     if (!preset) return
     updateLayer(layer.id, {
@@ -176,65 +168,72 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
       ...presetParams(preset),
     })
   }
-  const onGroup = (g) => applyPreset(presetsInGroup(g)[0], g)
-
-  /* Theme — recolour roled color params (bg/fg/accent) via the imported
-   * loops theme module. Non-roled params and user edits survive. */
-  const themeId = layer.themeId ?? DEFAULT_THEME
-  const invert = !!layer.themeInvert
-  const onTheme  = (id) => updateLayer(layer.id, { themeId: id, ...themeParams(layer, loop?.params, id, invert) })
-  const onInvert = (v)  => updateLayer(layer.id, { themeInvert: v, ...themeParams(layer, loop?.params, themeId, v) })
-
-  const onRandomise = () => {
-    const patch = {}
-    for (const p of loop?.params ?? []) {
-      if (p.noRandom) continue
-      if (p.type === 'range') {
-        const step = p.step ?? 1
-        const raw = p.min + Math.random() * (p.max - p.min)
-        patch[p.key] = Math.min(p.max, Math.max(p.min, Number((Math.round(raw / step) * step).toFixed(4))))
-      } else if (p.type === 'toggle') {
-        patch[p.key] = Math.random() < 0.5
-      } else if (p.type === 'select' && p.options?.length) {
-        patch[p.key] = p.options[Math.floor(Math.random() * p.options.length)].value
-      }
-    }
-    updateLayer(layer.id, patch)
-  }
-
   return (
     <>
       <LabeledControl label="Category">
-        <Dropdown variant="subtle" size="sm" className="w-full" options={groupOptions} value={group} onChange={onGroup} />
+        <Dropdown
+          variant="subtle" size="sm" className="w-full"
+          options={GROUPS.map((g) => ({ value: g.id, label: g.label }))}
+          value={group}
+          onChange={(g) => applyPreset(presetsInGroup(g)[0], g)}
+        />
       </LabeledControl>
       <LabeledControl label="Preset">
         <Dropdown
           variant="subtle" size="sm" className="w-full"
-          options={presetOptions}
+          options={presets.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))}
           value={layer.presetId}
           onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
         />
       </LabeledControl>
-
-      <AutoControls schema={loop?.params ?? []} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledControl label="Theme">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={THEME_OPTIONS} value={themeId} onChange={onTheme} />
-        </LabeledControl>
-        <LabeledControl label="Invert">
-          <ViewToggle
-            options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
-            viewMode={invert ? 'on' : 'off'}
-            onViewChange={(v) => onInvert(v === 'on')}
-          />
-        </LabeledControl>
-      </div>
-
-      <EditorButton variant="primary" size="sm" className="w-full" onClick={onRandomise}>
-        Randomise
-      </EditorButton>
     </>
+  )
+}
+
+/* Pointer rows → the Parameters / Effects tabs (SelectionPalettePanel
+ * listens). One row for the type's own parameters, one for its effect
+ * (Phase 7 — every positioned layer can host one; the photo row IS the
+ * effect row). */
+const PARAMS_LABELS = {
+  shape:   () => 'Shape parameters',
+  text:    () => 'Text parameters',
+  pattern: () => 'Pattern parameters',
+  loop:    (l) => `Loop · ${l.presetLabel ?? 'parameters'}`,
+  kinetic: (l) => `Kinetic · ${l.presetLabel ?? 'parameters'}`,
+}
+const EFFECTABLE = new Set(['shape', 'text', 'pattern', 'path', 'loop', 'photo'])
+
+function ParamsLink({ layer }) {
+  const openParams  = () => window.dispatchEvent(new CustomEvent('kol:open-params'))
+  const openEffects = () => window.dispatchEvent(new CustomEvent('kol:open-effects'))
+  const labelFor = PARAMS_LABELS[layer.type]
+  /* Engine (GL) loops can't host effects yet (no GL source path) — showing
+   * the row would open Parameters onto nothing (review r3). */
+  const engineLoop = layer.type === 'loop' && loopById(layer.loopId)?.kind === 'engine'
+  const fx = EFFECTABLE.has(layer.type) ? filterById(layer.filterId) : null
+  const showEffect = EFFECTABLE.has(layer.type) && !engineLoop
+  if (!labelFor && !showEffect) return null
+  return (
+    <div className="flex flex-col gap-2">
+      {labelFor && (
+        <EditorButton
+          variant="secondary" size="sm" className="w-full"
+          onClick={openParams}
+          title="Open the Parameters tab"
+        >
+          {labelFor(layer)}
+        </EditorButton>
+      )}
+      {showEffect && (
+        <EditorButton
+          variant="secondary" size="sm" className="w-full"
+          onClick={openEffects}
+          title="Open the Effects tab"
+        >
+          {fx ? `Effect · ${fx.label}` : 'Add effect'}
+        </EditorButton>
+      )}
+    </div>
   )
 }
 
@@ -257,190 +256,40 @@ function GroupFields({ layer, ungroupLayer }) {
   )
 }
 
-/**
- * PatternFields — full Pattern Lab control surface in compose's inspector
- * (Phase 6f). Layer carries the pattern params directly; LayerRenderer +
- * build.js call `buildPatternSvg` per render.
- *
- * "Apply saved pattern" picker reads from `library.pattern` (Pattern Lab's
- * save slot) and copies params into the layer. "Save to library" sends the
- * current layer's params back the other way — symmetric with Type Lab.
- */
-function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
-  const { library, savePattern } = useGeneratorLibrary()
-  const { flattenPattern }       = useComposeState()
-  const { loadPattern }          = usePatternState()
-  const navigate                 = useNavigate()
-  const patterns = library.pattern ?? []
-  const patternOptions = [
-    { value: '', label: '— pick spec' },
-    ...patterns.map((p, i) => ({ value: p.id, label: `Pattern ${i + 1}` })),
-  ]
-
-  const rules = layer.rules ?? []
-  const setRules = (next) => updateLayer(layer.id, { rules: next })
-  const addRule    = () => setRules([...rules, newRule()])
-  const updateRule = (idx, updated) => setRules(rules.map((r, i) => i === idx ? updated : r))
-  const removeRule = (idx) => setRules(rules.filter((_, i) => i !== idx))
-  const rerollRule = (idx) => setRules(rules.map((r, i) => i === idx ? { ...randomRule(), id: r.id } : r))
-  const randomizeRules = () => {
-    const count = Math.floor(Math.random() * 3) + 1
-    setRules(Array.from({ length: count }, randomRule))
-  }
-
-  const onPickSpec = (id) => {
-    if (!id) return
-    const spec = patterns.find((p) => p.id === id)
-    if (!spec) return
-    /* Copy spec params into the layer. Color + bg stay as-is so the user's
-     * palette refs aren't trampled by Pattern Lab's literal hex values. */
-    updateLayer(layer.id, {
-      shapeId:   spec.shapeId   ?? layer.shapeId,
-      customSvg: spec.customSvg ?? layer.customSvg,
-      cols:      spec.cols      ?? layer.cols,
-      rows:      spec.rows      ?? layer.rows,
-      gap:       spec.gap       ?? layer.gap,
-      padding:   spec.padding   ?? layer.padding,
-      stretch:   spec.stretch   ?? layer.stretch,
-      overflow:  spec.overflow  ?? layer.overflow,
-      rules:     spec.rules     ?? layer.rules,
-    })
-  }
-
-  const onSave = () => {
-    /* Save shape matches Pattern mode's saver: bg is the canonical source —
-     * `null` when off, hex/ref when on. patternFromSpec on load derives
-     * `bgOn = spec.bg != null` so we don't store a redundant flag. */
-    savePattern({
-      shapeId:   layer.shapeId,
-      customSvg: layer.customSvg,
-      cols:      layer.cols,
-      rows:      layer.rows,
-      gap:       layer.gap,
-      padding:   layer.padding,
-      stretch:   layer.stretch,
-      overflow:  layer.overflow,
-      bg:        layer.bgOn ? layer.bg : null,
-      color:     layer.color,
-      rules:     layer.rules ?? [],
-      scale:     layer.scale,
-    })
-  }
-
-  const onEditInPatternMode = () => {
-    /* Resolve palette refs to literal hex on entry — Pattern mode operates
-     * on hex; passing 'palette:secondary' verbatim breaks the renderer. The
-     * palette-ref binding on the source layer is intentionally lost (same
-     * trade-off as the photoshop-paint adoption — refs only survive while
-     * editing inside compose itself). `boundLayerId` opts into round-trip
-     * so subsequent edits in Pattern mode flow back to this layer. */
-    const resolvedColor = resolveColor(layer.color, palette) ?? layer.color
-    const resolvedBg    = layer.bgOn ? (resolveColor(layer.bg, palette) ?? layer.bg) : null
-    loadPattern({
-      shapeId:   layer.shapeId,
-      customSvg: layer.customSvg,
-      cols:      layer.cols,
-      rows:      layer.rows,
-      gap:       layer.gap,
-      padding:   layer.padding,
-      stretch:   layer.stretch,
-      overflow:  layer.overflow,
-      color:     resolvedColor,
-      bg:        resolvedBg,
-      rules:     layer.rules ?? [],
-    }, { boundLayerId: layer.id })
-    navigate('/editor/pattern')
-  }
-
-  const onFlatten = () => flattenPattern(layer.id)
-
-  return (
-    <>
-      {patterns.length > 0 && (
-        <LabeledControl label="Apply saved pattern">
-          <Dropdown
-            variant="subtle" size="sm" className="w-full"
-            options={patternOptions}
-            value=""
-            onChange={onPickSpec}
-          />
-        </LabeledControl>
-      )}
-
-      <AutoControls schema={PATTERN_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-
-      <LabeledControl label={`Rules · ${rules.length}`}>
-        <div className="flex flex-col gap-2">
-          {rules.map((rule, i) => (
-            <RuleRow
-              key={rule.id}
-              rule={rule}
-              onChange={(updated) => updateRule(i, updated)}
-              onRemove={() => removeRule(i)}
-              onReroll={() => rerollRule(i)}
-            />
-          ))}
-          <EditorButton variant="primary" size="sm" iconLeft="plus" onClick={addRule}>
-            Add rule
-          </EditorButton>
-        </div>
-      </LabeledControl>
-
-      <div className="grid grid-cols-2 gap-2">
-        <EditorButton variant="primary" size="sm" className="w-full" onClick={randomizeRules}>
-          Randomize rules
-        </EditorButton>
-        <EditorButton variant="primary" size="sm" className="w-full" onClick={onSave} title="Save current pattern params to the shared library">
-          Save to library
-        </EditorButton>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 pt-2 border-t border-fg-08">
-        <EditorButton variant="secondary" size="sm" className="w-full" onClick={onEditInPatternMode}
-          title="Open this layer's params in Pattern mode for richer editing">
-          Pattern mode
-        </EditorButton>
-        <EditorButton variant="secondary" size="sm" className="w-full" onClick={onFlatten}
-          title="Flatten the pattern to static SVG shapes (one-way)">
-          Flatten
-        </EditorButton>
-      </div>
-    </>
-  )
-}
-
-function ImageFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
+/* Photo content source — upload / library pick / preview / clear. Every
+ * write sets srcType so image ↔ video swaps render correctly (library picks
+ * can be videos; the URL is proxied same-origin so filters don't taint). */
+function ImageSource({ layer, patch }) {
   const fileRef = useRef(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const onPick = (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     const reader = new FileReader()
-    reader.onload = () => setProp('src', reader.result)
+    reader.onload = () => patch({ src: reader.result, srcType: 'image' })
     reader.readAsDataURL(file)
   }
+  const onLibraryPick = (url, { contentType } = {}) => {
+    patch({ src: proxied(url), srcType: isVideoType(contentType) ? 'video' : 'image' })
+  }
   const onClear = () => {
-    setProp('src', null)
+    patch({ src: null, srcType: 'image' })
     if (fileRef.current) fileRef.current.value = ''
   }
-  /* Filter — image filters (src/filters) rendered on a live canvas. Picking
-   * one writes the filter's full param defaults onto the layer (loop preset
-   * semantics — a previous filter's stale keys ride along harmlessly). */
-  const activeFilter = filterById(layer.filterId)
-  const filterOptions = [
-    { value: '', label: 'None' },
-    ...FILTERS.map((f) => ({ value: f.id, label: f.label })),
-  ]
-  const onFilter = (id) => {
-    if (!id) { setProp('filterId', null); return }
-    const f = filterById(id)
-    if (!f) return
-    updateLayer(layer.id, { filterId: id, ...schemaDefaults(f.params) })
-  }
   return (
-    <>
-      <LabeledControl label="Source">
-        <input ref={fileRef} type="file" accept="image/*" onChange={onPick} className="hidden" />
-        {layer.src && (
+    <LabeledControl label="Source">
+      <input ref={fileRef} type="file" accept="image/*" onChange={onPick} className="hidden" />
+      {layer.src && (
+        layer.srcType === 'video' ? (
+          <video
+            src={layer.src}
+            muted
+            preload="metadata"
+            className="rounded overflow-hidden border border-fg-08 mb-2 w-full"
+            style={{ aspectRatio: '16 / 9', objectFit: layer.fit ?? 'cover' }}
+            aria-label="Video preview"
+          />
+        ) : (
           <div
             className="rounded overflow-hidden border border-fg-08 mb-2"
             style={{
@@ -452,131 +301,36 @@ function ImageFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
             }}
             aria-label="Image preview"
           />
-        )}
-        <div className="flex items-center gap-2">
+        )
+      )}
+      <div className="flex items-center gap-2">
+        <EditorButton
+          variant="secondary" size="sm" iconLeft="upload" iconSize={12}
+          className="flex-1"
+          onClick={() => fileRef.current?.click()}
+        >
+          {layer.src ? 'Replace' : 'Upload image'}
+        </EditorButton>
+        <EditorButton
+          variant="secondary" size="sm"
+          className="flex-1"
+          onClick={() => setPickerOpen(true)}
+        >
+          Library
+        </EditorButton>
+        {layer.src && (
           <EditorButton
-            variant="secondary" size="sm" iconLeft="upload" iconSize={12}
-            className="flex-1"
-            onClick={() => fileRef.current?.click()}
-          >
-            {layer.src ? 'Replace' : 'Upload image'}
-          </EditorButton>
-          {layer.src && (
-            <EditorButton
-              variant="secondary" size="sm" iconOnly="trash" iconSize={12}
-              aria-label="Clear image"
-              onClick={onClear}
-            />
-          )}
-        </div>
-      </LabeledControl>
-      <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-      <LabeledControl label="Filter">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={filterOptions}
-          value={layer.filterId ?? ''}
-          onChange={onFilter}
-        />
-      </LabeledControl>
-      {activeFilter && layer.imgW != null && (
-        <span className="kol-helper-12 text-meta">Filters don't apply to cropped photos.</span>
-      )}
-      {activeFilter && (
-        <AutoControls schema={activeFilter.params} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-      )}
-    </>
-  )
-}
-
-/**
- * TextFields — full Type Lab typography surface for the selected text layer.
- *
- * Optional "Saved as" picker reads from the shared library's `type` slot
- * (saves from Type Lab). Picking a spec copies its typography fields into
- * the layer (no live link — layer stays self-contained).
- */
-function TextFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
-  const { library } = useGeneratorLibrary()
-  const { flattenText } = useComposeState()
-  const { loadType } = useTypeState()
-  const navigate = useNavigate()
-  const specs = library.type ?? []
-
-  const onEditInTypeMode = () => {
-    /* Resolve palette refs to literal hex on entry (same trade-off as
-     * Pattern mode's "Edit in"). `boundLayerId: layer.id` makes the new
-     * frame's id match the layer so updateFrame round-trips back. */
-    const resolvedColor = resolveColor(layer.color, palette) ?? layer.color
-    loadType({
-      text:       layer.text,
-      width:      layer.width,
-      weight:     layer.weight,
-      italic:     layer.italic,
-      size:       layer.size,
-      tracking:   layer.tracking,
-      lineHeight: layer.lineHeight,
-      case:       layer.case,
-      color:      resolvedColor,
-      textAlign:  layer.textAlign,
-    }, { boundLayerId: layer.id })
-    navigate('/editor/type')
-  }
-
-  const onFlatten = () => flattenText(layer.id)
-  const specOptions = [
-    { value: '', label: '— free-form' },
-    ...specs.map((t, i) => ({ value: t.id, label: t.text?.slice(0, 24) || `Spec ${i + 1}` })),
-  ]
-
-  const onPickSpec = (id) => {
-    if (!id) return
-    const spec = specs.find((t) => t.id === id)
-    if (!spec) return
-    /* Copy spec values into the layer fields. Self-contained — no specId tag. */
-    updateLayer(layer.id, {
-      text:       spec.text       ?? layer.text,
-      width:      spec.width      ?? layer.width,
-      weight:     spec.weight     ?? layer.weight,
-      italic:     spec.italic     ?? layer.italic,
-      size:       spec.size       ?? layer.size,
-      tracking:   spec.tracking   ?? layer.tracking,
-      lineHeight: spec.lineHeight ?? layer.lineHeight,
-      case:       spec.case       ?? layer.case,
-      textAlign:  spec.textAlign  ?? layer.textAlign,
-    })
-  }
-
-  return (
-    <>
-      {specs.length > 0 && (
-        <LabeledControl label="Apply saved spec">
-          <Dropdown
-            variant="subtle" size="sm" className="w-full"
-            options={specOptions}
-            value=""
-            onChange={onPickSpec}
+            variant="secondary" size="sm" iconOnly="trash" iconSize={12}
+            aria-label="Clear image"
+            onClick={onClear}
           />
-        </LabeledControl>
-      )}
-
-      <AutoControls schema={TEXT_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
-
-      <div className="grid grid-cols-2 gap-2">
-        <EditorButton variant="secondary" size="sm" className="w-full" onClick={onEditInTypeMode}
-          title="Open this layer's spec in Type mode as a new frame">
-          Type mode
-        </EditorButton>
-        <EditorButton variant="secondary" size="sm" className="w-full" onClick={onFlatten}
-          title="Flatten the text to glyph-outline shapes (one-way)">
-          Flatten
-        </EditorButton>
+        )}
       </div>
-    </>
+      <MediaPicker open={pickerOpen} onClose={() => setPickerOpen(false)} onPick={onLibraryPick} />
+    </LabeledControl>
   )
 }
 
-/* One numeric field with its axis letter OUTSIDE the input, to the left. */
 /* Flip action button — mirrors the selected layer about its own center.
  * Paths bake the mirror into node geometry; other layers toggle flipX/Y
  * (state.flipLayer decides). Flag layers show an active tint when flipped. */
@@ -600,6 +354,11 @@ function FlipButton({ axis, layer, flipLayer }) {
   )
 }
 
+/* One numeric field with its axis letter OUTSIDE the input, to the left.
+ * `chars` makes the inner input hug a fixed width (the shell never grows on
+ * focus — the old ghost/flex-1 combo let a focused input stretch past the
+ * rail and force horizontal scroll; review item 7). Filled variant matches
+ * the stroke panel's Weight field. */
 function AxisField({ label, value, onChange }) {
   return (
     <div className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -609,9 +368,7 @@ function AxisField({ label, value, onChange }) {
       >
         {label}
       </span>
-      <div className="flex-1 min-w-0">
-        <Input variant="ghost" size="sm" type="number" value={value} onChange={onChange} />
-      </div>
+      <Input variant="filled" size="sm" type="number" chars={5} value={value} onChange={onChange} />
     </div>
   )
 }

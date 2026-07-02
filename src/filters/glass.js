@@ -228,7 +228,8 @@ export default {
     { key: 'mirror', label: 'Mirror fold', type: 'toggle', default: false },
     { key: 'spin', label: 'Spin · turns', type: 'range', min: -2, max: 2, step: 1, default: 0 },
     { key: 'drift', label: 'Drift', type: 'range', min: 0, max: 0.5, step: 0.01, default: 0 },
-    { key: 'phase', label: 'Phase', type: 'range', min: 0, max: 3, step: 0.05, default: 0 },
+    /* time-less pattern fields (no t arg) ignore phase */
+    { key: 'phase', label: 'Phase', type: 'range', min: 0, max: 3, step: 0.05, default: 0, when: (l) => !['diagonal', 'shards', 'grid', 'lens'].includes(l.pattern) },
     { key: 'pulse', label: 'Pulse', type: 'range', min: 0, max: 1, step: 0.05, default: 0 },
   ],
   apply(ctx, src, w, h, p, u) {

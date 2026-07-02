@@ -1,0 +1,36 @@
+/**
+ * mediaLibrary — read-only access to the kol-media CDN bucket (the labs
+ * model, kol-labs-single src/lib/mediaLibrary.js). Public, no auth: list via
+ * the admin API, fetch objects by their public URL.
+ *
+ *   const objs = await listMedia('photoshoot/')  // [{ key, contentType, size }]
+ *   <img src={mediaUrl(obj.key)} />               // https://media.kolkrabbi.io/<key>
+ *
+ * Canvas consumers (photo filters getImageData the source) MUST load through
+ * `proxied(url)` — the CDN sends NO CORS headers, so a cross-origin load
+ * taints the canvas. The Vite dev/preview proxy rewrites /media/* to the CDN
+ * same-origin (vite.config.js); static prod builds need an equivalent host
+ * rewrite.
+ */
+
+const ADMIN_BASE = 'https://admin.kolkrabbi.io'
+const PUBLIC_BASE = 'https://media.kolkrabbi.io'
+
+export const mediaUrl = (key) => `${PUBLIC_BASE}/${key}`
+export const isImageType = (ct) => !!ct && ct.startsWith('image/')
+export const isVideoType = (ct) => !!ct && ct.startsWith('video/')
+
+/* Rewrite a public CDN URL to the same-origin /media proxy path. Non-CDN
+ * URLs (data:, blob:, already-proxied) pass through untouched. */
+export const proxied = (url) => url.replace(/^https:\/\/media\.kolkrabbi\.io\//, '/media/')
+
+/* List bucket objects, optionally under a folder prefix. Throws on a non-OK
+ * response so callers can show an error. */
+export async function listMedia(prefix = '', { signal } = {}) {
+  const params = new URLSearchParams()
+  if (prefix) params.set('prefix', prefix)
+  const res = await fetch(`${ADMIN_BASE}/api/list?${params}`, { signal })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = await res.json()
+  return data.objects || []
+}

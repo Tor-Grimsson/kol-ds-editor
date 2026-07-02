@@ -190,7 +190,7 @@ export default {
     { key: 'kill', label: 'Kill', type: 'range', min: 0.04, max: 0.075, step: 0.0005, default: 0.0649, noRandom: true },
     { key: 'du', label: 'Diffuse U', type: 'range', min: 0.05, max: 0.3, step: 0.005, default: 0.16, noRandom: true },
     { key: 'dv', label: 'Diffuse V', type: 'range', min: 0.02, max: 0.16, step: 0.005, default: 0.08, noRandom: true },
-    { key: 'iters', label: 'Speed', type: 'range', min: 1, max: 30, step: 1, default: 10, noRandom: true },
+    { key: 'iters', label: 'Speed', type: 'range', min: 1, max: 30, step: 1, default: 10, noRandom: true, tab: 'anim', section: 'Motion' },
     { key: 'gain', label: 'Contrast', type: 'range', min: 1, max: 6, step: 0.1, default: 3.2 },
   ],
   draw(ctx, u, w, h, p) {

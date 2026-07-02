@@ -66,7 +66,7 @@ export default function InspectorRail() {
 
   return (
     <div className="kol-compose-rail kol-compose-rail--inspector">
-      <div className="flex items-center gap-3 px-4 pt-3 pb-2">
+      <div className="flex items-center gap-3 px-4 min-h-[46px]">
         {title && <span className="kol-helper-12 text-emphasis">{title}</span>}
         {canDelete && (
           <EditorButton

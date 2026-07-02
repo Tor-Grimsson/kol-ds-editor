@@ -34,11 +34,27 @@ const ENGINES = {
 export function createEngine(def, canvas) {
   const Engine = ENGINES[def?.engine]
   if (!Engine) throw new Error(`unknown gl filter engine "${def?.engine}"`)
-  return new Engine(canvas)
+  const engine = new Engine(canvas)
+  /* Interactive cameras (Rutt-Etra's OrbitControls) start disabled — the
+   * layer's `cameraDrag` toggle enables them (setCameraDrag). */
+  if (engine.controls) engine.controls.enabled = false
+  return engine
+}
+
+/* Enable/disable the engine's interactive camera (no-op without controls). */
+export function setCameraDrag(def, engine, on) {
+  if (engine?.controls) engine.controls.enabled = !!on
 }
 
 export function setSource(def, engine, srcCanvas) {
   engine.setSource(srcCanvas)
+}
+
+/* Flag the source texture for re-upload. Video layers redraw the fitted
+ * canvas each drive — CanvasTexture only uploads on needsUpdate, so the
+ * renderer calls this per frame (every engine exposes touchSource()). */
+export function touchSource(def, engine) {
+  engine.touchSource?.()
 }
 
 export function applyParams(def, engine, params) {
@@ -51,6 +67,13 @@ export function driveEngine(def, engine, { dt }) {
 
 export function destroyEngine(engine) {
   if (!engine) return
-  if (typeof engine.dispose === 'function') engine.dispose()
-  else if (typeof engine.destroy === 'function') engine.destroy()
+  /* Teardown runs inside React's unmount cleanup — a throw here would kill
+   * the whole tree (the blank-screen-on-delete bug). Engines are being
+   * discarded anyway; log and move on. */
+  try {
+    if (typeof engine.dispose === 'function') engine.dispose()
+    else if (typeof engine.destroy === 'function') engine.destroy()
+  } catch (err) {
+    console.warn('[gl] engine dispose failed (ignored):', err?.message ?? err)
+  }
 }

@@ -38,8 +38,8 @@ export const SHAPE_SCHEMA = [
   { key: 'kind',       label: 'Kind',        type: 'select',    default: 'logo',     options: KIND_OPTIONS },
   { key: 'variant',    label: 'Variant',     type: 'select',    default: 'logomark', options: LOGO_VARIANTS, when: isKind('logo') },
   { key: 'fit',        label: 'Fit',         type: 'segmented', default: 'fill',     options: FIT_OPTIONS,   when: isKind('flatten') },
-  { key: 'sides',      label: 'Sides',       type: 'range', min: 3, max: 12, step: 1,    default: 5,   format: (v) => `${v}`,     when: isKind('polygon'), animatable: false },
-  { key: 'points',     label: 'Points',      type: 'range', min: 3, max: 12, step: 1,    default: 5,   format: (v) => `${v}`,     when: isKind('star'),    animatable: false },
-  { key: 'innerRatio', label: 'Inner ratio', type: 'range', min: 0.2, max: 0.9, step: 0.05, default: 0.5, format: (v) => v.toFixed(2), when: isKind('star'),    animatable: false },
-  { key: 'slope',      label: 'Slope',       type: 'segmented', default: '\\',        options: SLOPE_OPTIONS, when: isKind('line') },
+  { key: 'sides',      label: 'Sides',       type: 'range', min: 3, max: 12, step: 1,    default: 5,   format: (v) => `${v}`,     when: isKind('polygon'), animatable: false, section: 'Geometry' },
+  { key: 'points',     label: 'Points',      type: 'range', min: 3, max: 12, step: 1,    default: 5,   format: (v) => `${v}`,     when: isKind('star'),    animatable: false, section: 'Geometry' },
+  { key: 'innerRatio', label: 'Inner ratio', type: 'range', min: 0.2, max: 0.9, step: 0.05, default: 0.5, format: (v) => v.toFixed(2), when: isKind('star'),    animatable: false, section: 'Geometry' },
+  { key: 'slope',      label: 'Slope',       type: 'segmented', default: '\\',        options: SLOPE_OPTIONS, when: isKind('line'), section: 'Geometry' },
 ]

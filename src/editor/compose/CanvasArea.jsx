@@ -9,7 +9,9 @@ import CropOverlay from './CropOverlay'
 import { matchAny } from '../state/keymap'
 import { useTool } from '../state/tools'
 import { useColorTarget } from '../color/useColorTarget'
+import { useLayerEdit } from './useLayerEdit'
 import { computeSnapTargets, findSnap } from './snap'
+import { transport } from '../params/transport'
 
 /* Per-tool cursor on the canvas stage. Using system cursors directly —
  * `crosshair` for shape-creation tools (Photoshop/Figma convention),
@@ -72,6 +74,8 @@ export default function CanvasArea() {
     insertFromLibrary,
     activePaint, setActivePaint,
     snapEnabled,
+    showRulers, toggleRulers,
+    guides, setGuides,
     undo, redo, canUndo, canRedo,
     beginTransaction, commitTransaction,
   } = useComposeState()
@@ -79,6 +83,14 @@ export default function CanvasArea() {
   /* Paint shortcuts (D / X / Shift+X / N) write through useColorTarget so
    * the inspector, the picker, and the keymap share one writer. */
   const colorTarget = useColorTarget()
+  /* Arrow-key nudges write through the shared coalescing editor (same
+   * mechanism as the inspector's slider drags) so a burst of keypresses
+   * collapses into ONE undo entry. 600ms of quiet commits; a selection
+   * change flushes immediately via useLayerEdit's id-change flush, so
+   * nudges on different layers never merge. */
+  const nudgeEdit = useLayerEdit(selectedId, { history: 'coalesce', coalesceMs: 600 })
+  /* Double-0 opacity chord — timestamp of the last bare 0 press. */
+  const zeroTapRef = useRef(null)
 
   const selectedLayer  = layers.find((l) => l.id === selectedId) ?? null
   const isPositionedSel = selectedLayer && !COVER_TYPES.includes(selectedLayer.type)
@@ -114,6 +126,27 @@ export default function CanvasArea() {
     if (!node) return 1
     const w = node.getBoundingClientRect().width
     return w > 0 ? w / CANVAS_VIRTUAL_W : 1
+  }, [])
+
+  /* Stage pointer → transport (virtual px) — feeds the 'Pointer over layer'
+   * modulation sources. Listener lives on the stage node so rail/panel
+   * mouse traffic never notifies bound layers. */
+  useEffect(() => {
+    const node = stageRef.current
+    if (!node) return
+    const onMove = (e) => {
+      const r = node.getBoundingClientRect()
+      if (r.width === 0) return
+      const k = CANVAS_VIRTUAL_W / r.width
+      transport.setStagePointer((e.clientX - r.left) * k, (e.clientY - r.top) * k)
+    }
+    const onLeave = () => transport.setStagePointer(null)
+    node.addEventListener('mousemove', onMove)
+    node.addEventListener('mouseleave', onLeave)
+    return () => {
+      node.removeEventListener('mousemove', onMove)
+      node.removeEventListener('mouseleave', onLeave)
+    }
   }, [])
 
   /* ─── drag state ─── */
@@ -344,22 +377,27 @@ export default function CanvasArea() {
       const id = layerEl.getAttribute('data-layer-id')
       const layer = layers.find((l) => l.id === id)
       if (!layer) return
-      if (e.shiftKey) {
-        toggleSelection(id)
+      /* Locked layers are canvas-inert: not selectable, not draggable —
+       * the click falls through to the stage (marquee / deselect). They
+       * remain selectable from the layer panel. */
+      if (!layer.locked) {
+        if (e.shiftKey) {
+          toggleSelection(id)
+          return
+        }
+        select(id)
+        if (!COVER_TYPES.includes(layer.type)) {
+          e.preventDefault()
+          beginTransaction()
+          setDrag({
+            mode: 'move',
+            layerId: id,
+            startX: e.clientX, startY: e.clientY,
+            startBox: { x: layer.x, y: layer.y, w: layer.w, h: layer.h },
+          })
+        }
         return
       }
-      select(id)
-      if (!COVER_TYPES.includes(layer.type) && !layer.locked) {
-        e.preventDefault()
-        beginTransaction()
-        setDrag({
-          mode: 'move',
-          layerId: id,
-          startX: e.clientX, startY: e.clientY,
-          startBox: { x: layer.x, y: layer.y, w: layer.w, h: layer.h },
-        })
-      }
-      return
     }
 
     /* Empty stage with the Select tool — start a marquee. Tiny drags
@@ -411,7 +449,7 @@ export default function CanvasArea() {
           updateLayer(layerId, { x: cand.x, y: cand.y })
           return
         }
-        const targets = computeSnapTargets(layers, layerId, CANVAS_W, viewH)
+        const targets = computeSnapTargets(layers, layerId, CANVAS_W, viewH, guides)
         const snap = findSnap(cand, targets)
         updateLayer(layerId, { x: cand.x + snap.dx, y: cand.y + snap.dy })
         setSnapGuides(snap.hGuide != null || snap.vGuide != null ? { h: snap.hGuide, v: snap.vGuide } : null)
@@ -626,7 +664,8 @@ export default function CanvasArea() {
    * kol:show-shortcuts) — CanvasArea owns crop-mode state. */
   useEffect(() => {
     const onCropEvent = (e) => {
-      const layer = layers.find((l) => l.id === e.detail && l.type === 'photo' && !l.locked)
+      /* Video sources excluded — crop math assumes a still. */
+      const layer = layers.find((l) => l.id === e.detail && l.type === 'photo' && l.srcType !== 'video' && !l.locked)
       if (layer) enterCrop(layer)
     }
     window.addEventListener('kol:enter-crop', onCropEvent)
@@ -667,7 +706,7 @@ export default function CanvasArea() {
     if (layer?.type === 'path') {
       e.preventDefault()
       enterNodeEdit(layer)
-    } else if (layer?.type === 'photo' && !layer.locked) {
+    } else if (layer?.type === 'photo' && layer.srcType !== 'video' && !layer.locked) {
       e.preventDefault()
       enterCrop(layer)
     }
@@ -705,6 +744,10 @@ export default function CanvasArea() {
     }
     const matched = layers
       .filter((l) => typeof l.x === 'number' && typeof l.y === 'number')
+      /* Hidden / locked layers can't be marquee-selected — matching what a
+       * direct click can reach (invisible layers render nothing; locked
+       * layers shouldn't join a bulk move/delete by accident). */
+      .filter((l) => l.visible !== false && l.locked !== true)
       .filter((l) => {
         const lw = l.w ?? 0
         const lh = l.h ?? 0
@@ -807,6 +850,25 @@ export default function CanvasArea() {
       const editable = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)
       if (editable) return
 
+      /* Layer opacity digits (Photoshop convention): 1-9 = 10-90%, 0 = 100%,
+       * 0 twice within 500ms = 0%. Handled before keymap matching — combos
+       * can't express ranges or the double-tap chord. */
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-9]$/.test(e.key) && selectedLayer) {
+        e.preventDefault()
+        const digit = Number(e.key)
+        const now = performance.now()
+        let v
+        if (digit === 0) {
+          v = zeroTapRef.current != null && now - zeroTapRef.current < 500 ? 0 : 1
+          zeroTapRef.current = now
+        } else {
+          v = digit / 10
+          zeroTapRef.current = null
+        }
+        updateLayer(selectedLayer.id, { opacity: v })
+        return
+      }
+
       const shortcut = matchAny(e)
       if (!shortcut) return
 
@@ -842,6 +904,7 @@ export default function CanvasArea() {
           return
         }
 
+        case 'toggle-rulers':     e.preventDefault(); toggleRulers(); return
         case 'toggle-lock':       if (layer) { e.preventDefault(); toggleLayerLock(layer.id) }; return
         case 'toggle-visibility': if (layer) { e.preventDefault(); toggleLayer(layer.id) }; return
 
@@ -868,7 +931,7 @@ export default function CanvasArea() {
                      : shortcut.id.includes('right') ? [1, 0]
                      : shortcut.id.includes('up') ? [0, -1]
                      : [0, 1]
-          updateLayer(layer.id, { x: layer.x + axis[0] * step, y: layer.y + axis[1] * step })
+          nudgeEdit.patch({ x: layer.x + axis[0] * step, y: layer.y + axis[1] * step })
           return
         }
 
@@ -930,7 +993,7 @@ export default function CanvasArea() {
     return () => window.removeEventListener('keydown', onKey)
   }, [
     selectedLayer, selectedIds, isPositionedSel,
-    select, removeLayer, deleteSelected, updateLayer, duplicateLayer, toggleLayer, toggleLayerLock,
+    select, removeLayer, deleteSelected, updateLayer, nudgeEdit, duplicateLayer, toggleLayer, toggleLayerLock,
     flipSelected, enterNodeEdit,
     groupLayers, ungroupLayer,
     colorTarget, beginTransaction, commitTransaction,
@@ -983,7 +1046,20 @@ export default function CanvasArea() {
         }))
       } : undefined}
     >
-      <Canvas aspect={aspect} customRatio={canvasRatio} bgColor={bgColor ?? undefined} showGrid={showGrid} panEnabled>
+      <Canvas
+        aspect={aspect}
+        customRatio={canvasRatio}
+        bgColor={bgColor ?? undefined}
+        showGrid={showGrid}
+        showRulers={showRulers}
+        /* Ruler guides render at the viewport level (full-viewport span,
+         * Figma behavior) — state stays here in compose; the shell viewport
+         * gets it as props, same threading as showGrid/showRulers. */
+        guides={guides}
+        setGuides={setGuides}
+        guidesInteractive={tool === 'select' && !drag}
+        panEnabled
+      >
         <div
           ref={stageRef}
           data-tool={tool}
