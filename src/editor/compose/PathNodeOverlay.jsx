@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import { CanvasZoomContext } from '../shell/Canvas'
-import { normalizePathRings } from './path-math'
+import { normalizePathRings, pathD, nearestSegmentT, splitSegment, smoothNode } from './path-math'
 
 /**
  * PathNodeOverlay — node/bezier editing chrome for a selected `path` layer.
@@ -12,6 +12,9 @@ import { normalizePathRings } from './path-math'
  *   • drag handle  → adjusts that handle; the opposite handle mirrors it
  *                    (smooth) unless Alt is held (independent / break tangent)
  *   • click anchor → selects it; Delete/Backspace removes it (min 2 kept)
+ *   • click FIRST anchor of an open path → closes it (the pen-tool gesture)
+ *   • dbl-click anchor  → corner ↔ smooth toggle
+ *   • dbl-click segment → insert an anchor at that curve point (split)
  *   • Escape       → exit node-edit mode
  *
  * Nodes are layer-local; on drag-commit we renormalize so the anchor bbox
@@ -94,6 +97,12 @@ export default function PathNodeOverlay({
           y: posRef.current.y + norm.dy,
           w: norm.w, h: norm.h,
         })
+      } else if (drag.type === 'anchor' && drag.index === 0 && !layer.closed && nodesRef.current.length >= 2) {
+        /* Plain click on the FIRST anchor of an open path closes it — the
+         * same gesture that closes a draft under the pen tool (≥2 nodes,
+         * matching the pen's close threshold). A real write, so the open
+         * transaction commits it as one history entry. */
+        updateLayer(layer.id, { closed: true })
       }
       commitTransaction()
       setDrag(null)
@@ -104,7 +113,7 @@ export default function PathNodeOverlay({
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
     }
-  }, [drag, layer.id, toVirtual, updateLayer, commitTransaction])
+  }, [drag, layer.id, layer.closed, toVirtual, updateLayer, commitTransaction])
 
   /* Delete removes the selected node; Escape exits. Capture phase so we beat
    * the compose-level delete-layer / deselect handlers. */
@@ -146,6 +155,62 @@ export default function PathNodeOverlay({
     setDrag({ type: t, index })
   }
 
+  /* Renormalize + write a node-list change as ONE history entry. */
+  const commitNodes = (nextNodes) => {
+    const norm = normalizePathRings(nextNodes, holesRef.current)
+    beginTransaction()
+    updateLayer(layer.id, {
+      nodes: norm.nodes, holes: norm.holes,
+      x: posRef.current.x + norm.dx,
+      y: posRef.current.y + norm.dy,
+      w: norm.w, h: norm.h,
+    })
+    commitTransaction()
+  }
+
+  /* Double-click a segment → insert an anchor at the clicked curve point
+   * via de Casteljau split (shape-preserving: the new node takes the split
+   * handles, neighbors' handles trim to the half-curves). Straight segments
+   * insert a handle-less corner node. */
+  const onSegmentDoubleClick = (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const { vx, vy } = toVirtual(e.clientX, e.clientY)
+    const lx = vx - posRef.current.x
+    const ly = vy - posRef.current.y
+    const cur = nodesRef.current
+    const segCount = cur.length - 1 + (layer.closed ? 1 : 0)
+    let best = null
+    for (let i = 0; i < segCount; i++) {
+      const hit = nearestSegmentT(cur[i], cur[(i + 1) % cur.length], lx, ly)
+      if (!best || hit.dist < best.dist) best = { index: i, ...hit }
+    }
+    if (!best) return
+    const { a, mid, b } = splitSegment(cur[best.index], cur[(best.index + 1) % cur.length], best.t)
+    const next = [...cur]
+    next[best.index] = a
+    next[(best.index + 1) % cur.length] = b
+    next.splice(best.index + 1, 0, mid)
+    commitNodes(next)
+    setSelNode(best.index + 1)
+  }
+
+  /* Double-click an anchor → corner ↔ smooth. Corner drops both handles;
+   * smooth derives mirrored handles from the neighbor chord (~1/3 of each
+   * adjacent segment — same tangent model the mirror-by-default handle drag
+   * maintains). Anchors never move, so bounds are untouched (anchor-only). */
+  const onAnchorDoubleClick = (i) => (e) => {
+    e.preventDefault(); e.stopPropagation()
+    const cur = nodesRef.current
+    const n = cur[i]
+    const toggled = (n.in || n.out)
+      ? { ...n, in: null, out: null }
+      : smoothNode(cur, i, !!layer.closed)
+    if (toggled === n) return
+    beginTransaction()
+    updateLayer(layer.id, { nodes: cur.map((m, j) => (j === i ? toggled : m)) })
+    commitTransaction()
+  }
+
   const accent = 'var(--kol-accent-primary)'
 
   return (
@@ -156,6 +221,19 @@ export default function PathNodeOverlay({
       style={{ position: 'absolute', inset: 0, zIndex: 120, pointerEvents: 'none' }}
     >
       <g transform={`translate(${layer.x} ${layer.y})`}>
+        {/* invisible fat stroke = segment hit area (~12 screen px, on par
+          * with the anchor hit size). Rendered first so anchors/knobs win
+          * overlapping hits; mousedown swallowed so the stage router doesn't
+          * treat the click as empty-stage (deselect). */}
+        <path
+          d={pathD(nodes, !!layer.closed)}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={12 / zoom}
+          style={{ pointerEvents: 'stroke' }}
+          onMouseDown={(e) => { e.preventDefault(); e.stopPropagation() }}
+          onDoubleClick={onSegmentDoubleClick}
+        />
         {/* handle leashes + knobs */}
         {nodes.map((n, i) => (
           <g key={`h${i}`}>
@@ -189,7 +267,8 @@ export default function PathNodeOverlay({
             fill={i === selNode ? accent : 'white'}
             stroke={accent} strokeWidth={1} vectorEffect="non-scaling-stroke"
             style={{ pointerEvents: 'auto', cursor: 'move' }}
-            onMouseDown={startDrag('anchor', i)} />
+            onMouseDown={startDrag('anchor', i)}
+            onDoubleClick={onAnchorDoubleClick(i)} />
         ))}
       </g>
     </svg>

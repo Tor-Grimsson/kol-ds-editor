@@ -22,8 +22,10 @@ import { SHAPE_SCHEMA } from '../../params/schemas/shape'
 import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
 import { TEXT_SCHEMA } from '../../params/schemas/text'
 import { PHOTO_SCHEMA } from '../../params/schemas/photo'
+import { schemaDefaults } from '../../params/schema'
 import { GROUPS, loopById, presetsInGroup } from '../../../loops/registry'
 import { presetParams } from '../../../loops/registry'
+import { FILTERS, filterById } from '../../../filters'
 import { themeParams } from '../../../loops/theme'
 import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
 
@@ -34,8 +36,11 @@ import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
  * expand panel — this inspector handles the heavier per-type controls
  * (position, color, content, source, etc.).
  */
+/* Shape kinds with a primitive vector outline — convertible to a path. */
+const PATHABLE_KINDS = ['rect', 'ellipse', 'triangle', 'polygon', 'star', 'line']
+
 export default function LayerInspector({ layer }) {
-  const { updateLayer, ungroupLayer, flipLayer, palette } = useComposeState()
+  const { updateLayer, ungroupLayer, flipLayer, convertShapeToPath, palette } = useComposeState()
   /* Color writes route through useColorTarget so the inspector, the picker,
    * the keymap, and the swatch stack all share one writer. Photoshop model:
    * writes always succeed, app-level paint state is the canonical source. */
@@ -102,8 +107,31 @@ export default function LayerInspector({ layer }) {
         </div>
       )}
 
+      {/* Open ↔ closed toggle for paths — renderer + export honor `closed`
+        * via pathD; in node-edit, clicking the first anchor also closes. */}
+      {layer.type === 'path' && (
+        <LabeledControl label="Path">
+          <ViewToggle
+            options={[{ value: 'open', label: 'Open' }, { value: 'closed', label: 'Closed' }]}
+            viewMode={layer.closed ? 'closed' : 'open'}
+            onViewChange={(v) => setProp('closed', v === 'closed')}
+          />
+        </LabeledControl>
+      )}
+
       {layer.type === 'shape' && (
-        <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+        <>
+          <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+          {PATHABLE_KINDS.includes(layer.kind) && (
+            <EditorButton
+              variant="secondary" size="sm" className="w-full"
+              onClick={() => convertShapeToPath(layer.id)}
+              title="Convert the shape to an editable bezier path (one-way)"
+            >
+              Convert to path
+            </EditorButton>
+          )}
+        </>
       )}
 
       {layer.type === 'text' && (
@@ -111,7 +139,7 @@ export default function LayerInspector({ layer }) {
       )}
 
       {layer.type === 'pattern' && <PatternFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
-      {layer.type === 'photo' && <ImageFields layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />}
+      {layer.type === 'photo' && <ImageFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
       {layer.type === 'loop' && <LoopFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
 
       {layer.type === 'group' && (
@@ -132,7 +160,9 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
   const group = layer.loopGroup ?? 'shape'
   const presets = presetsInGroup(group)
   const groupOptions = GROUPS.map((g) => ({ value: g.id, label: g.label }))
-  const presetOptions = presets.map((p) => ({ value: p.id, label: p.label }))
+  /* Flat dropdown; `sub` buckets read as a label prefix (Dropdown has no
+   * option groups — revisit if it grows them). */
+  const presetOptions = presets.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))
 
   /* Picking a preset resets the loop's params to the preset's full set
    * (labs semantic — a preset is a curated starting point, not a patch). */
@@ -379,7 +409,7 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate }) 
   )
 }
 
-function ImageFields({ layer, setProp, palette, renderAnimate }) {
+function ImageFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
   const fileRef = useRef(null)
   const onPick = (e) => {
     const file = e.target.files?.[0]
@@ -391,6 +421,20 @@ function ImageFields({ layer, setProp, palette, renderAnimate }) {
   const onClear = () => {
     setProp('src', null)
     if (fileRef.current) fileRef.current.value = ''
+  }
+  /* Filter — image filters (src/filters) rendered on a live canvas. Picking
+   * one writes the filter's full param defaults onto the layer (loop preset
+   * semantics — a previous filter's stale keys ride along harmlessly). */
+  const activeFilter = filterById(layer.filterId)
+  const filterOptions = [
+    { value: '', label: 'None' },
+    ...FILTERS.map((f) => ({ value: f.id, label: f.label })),
+  ]
+  const onFilter = (id) => {
+    if (!id) { setProp('filterId', null); return }
+    const f = filterById(id)
+    if (!f) return
+    updateLayer(layer.id, { filterId: id, ...schemaDefaults(f.params) })
   }
   return (
     <>
@@ -427,6 +471,20 @@ function ImageFields({ layer, setProp, palette, renderAnimate }) {
         </div>
       </LabeledControl>
       <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+      <LabeledControl label="Filter">
+        <Dropdown
+          variant="subtle" size="sm" className="w-full"
+          options={filterOptions}
+          value={layer.filterId ?? ''}
+          onChange={onFilter}
+        />
+      </LabeledControl>
+      {activeFilter && layer.imgW != null && (
+        <span className="kol-helper-12 text-meta">Filters don't apply to cropped photos.</span>
+      )}
+      {activeFilter && (
+        <AutoControls schema={activeFilter.params} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+      )}
     </>
   )
 }

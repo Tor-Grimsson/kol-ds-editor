@@ -54,14 +54,18 @@ export function useComposeFile() {
     }
   }
 
-  const filename  = `compose-${canvasW}x${canvasH}-${Date.now().toString(36)}`
   /* Export snapshots the CURRENT frame — bound (animated/modulated) props
    * resolve to concrete values so build.js never sees a binding object. */
   const buildArgs = { layers: resolveLayersDeep(layers, transport.getCtx()), palette, aspect, canvasW, canvasH }
-  const onExportSvg = () => downloadComposeSvg(buildLayersSvg(buildArgs), `${filename}.svg`)
-  /* scale 1 — the canvas carries real output pixels, so export at exactly
-   * the set W×H (user bumps dimensions for higher res, not a hidden 2×). */
-  const onExportPng = () => downloadComposePng(buildLayersSvg(buildArgs), `${filename}.png`, 1)
+  const onExportSvg = () => downloadComposeSvg(buildLayersSvg(buildArgs), `compose-${canvasW}x${canvasH}-${Date.now().toString(36)}.svg`)
+  /* PNG takes the footer's 1×/2×/3× scale on top of the set W×H (the canvas
+   * carries real output pixels; scale is a resolution bump). Guarded so
+   * event-object callers (topbar menu onClick) fall back to 1×. SVG is
+   * vector — scale doesn't apply. */
+  const onExportPng = (scale) => {
+    const k = [1, 2, 3].includes(scale) ? scale : 1
+    downloadComposePng(buildLayersSvg(buildArgs), `compose-${canvasW * k}x${canvasH * k}-${Date.now().toString(36)}.png`, k)
+  }
 
   return { onSave, onSaveAs, onExportSvg, onExportPng, currentPresetId }
 }

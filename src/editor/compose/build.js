@@ -128,6 +128,14 @@ function photoLayerSvg(layer, w, h, idx, defs) {
   const ly = layer.y ?? 0
   const lw = layer.w ?? w
   const lh = layer.h ?? h
+  /* Filtered photo — snapshot the LIVE filter canvas (same idiom as engine
+   * loops): the DOM renderer owns the pixels; re-running a filter offscreen
+   * would duplicate sim state (dither free-runs). Falls through to the plain
+   * photo paths when no canvas is mounted (crop active renders as <img>). */
+  if (layer.filterId && layer.imgW == null && typeof document !== 'undefined') {
+    const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
+    if (live) return `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${lx}" y="${ly}" width="${lw}" height="${lh}"/>`
+  }
   /* Cropped photo — explicit crop window (imgX/Y/W/H frame-local): image
    * at its own rect, clipped to the frame. Mirrors PhotoLayer's cropped
    * branch. */
@@ -291,6 +299,17 @@ function loopLayerSvg(layer) {
   if (!loop || typeof document === 'undefined') return ''
   const lw = Math.max(1, layer.w ?? 0)
   const lh = Math.max(1, layer.h ?? 0)
+  const x = (layer.x ?? 0).toFixed(2)
+  const y = (layer.y ?? 0).toFixed(2)
+  /* Engine (GL) loops: snapshot the LIVE layer canvas — every engine renders
+   * with preserveDrawingBuffer, so toDataURL captures the current frame.
+   * Spinning a throwaway engine offscreen per export would drag the whole GL
+   * stack in for one frame. */
+  if (loop.kind === 'engine') {
+    const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
+    if (!live) return ''
+    return `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${x}" y="${y}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
+  }
   const scale = 2
   const c = document.createElement('canvas')
   c.width = Math.round(lw * scale)
@@ -298,7 +317,7 @@ function loopLayerSvg(layer) {
   const g = c.getContext('2d')
   g.scale(scale, scale)
   loop.draw(g, transport.getT(), lw, lh, layer)
-  return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${(layer.x ?? 0).toFixed(2)}" y="${(layer.y ?? 0).toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
+  return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${x}" y="${y}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
 }
 
 /* Recursive group export: a `<g transform="translate(gx gy)">` containing

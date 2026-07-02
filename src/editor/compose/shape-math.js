@@ -46,3 +46,60 @@ export function starPoints(w, h, points, innerRatio = 0.5, inset = 0) {
 export function trianglePoints(w, h, inset = 0) {
   return `${w / 2},${inset} ${inset},${h - inset} ${w - inset},${h - inset}`
 }
+
+/* Cubic-bezier circle constant (4/3·tan(π/8)) — 4-node ellipse approximation. */
+const KAPPA = 0.5523
+
+/* SVG points string → corner path nodes ({x, y, in, out} — path-math format). */
+const pointsToNodes = (str) => str.split(' ').map((p) => {
+  const [x, y] = p.split(',').map(Number)
+  return { x, y, in: null, out: null }
+})
+
+/* Convert a primitive shape layer's geometry to bezier path nodes
+ * (layer-local coords, path-math node format). Reproduces the painted
+ * geometry exactly — including the half-stroke inset the shape renderers
+ * apply, so a stroked shape keeps its stroke centerline after conversion.
+ * Returns { nodes, closed } or null for kinds with no primitive outline
+ * (logo / flatten). */
+export function shapeToPathNodes(layer) {
+  const w = Math.max(1, layer.w ?? 0)
+  const h = Math.max(1, layer.h ?? 0)
+  const sw = layer.strokeWidth ?? (layer.kind === 'line' ? 2 : 0)
+  const half = sw > 0 ? sw / 2 : 0
+  switch (layer.kind) {
+    case 'rect': {
+      const x0 = half, y0 = half, x1 = w - half, y1 = h - half
+      return { closed: true, nodes: [
+        { x: x0, y: y0, in: null, out: null },
+        { x: x1, y: y0, in: null, out: null },
+        { x: x1, y: y1, in: null, out: null },
+        { x: x0, y: y1, in: null, out: null },
+      ] }
+    }
+    case 'ellipse': {
+      const cx = w / 2, cy = h / 2
+      const rx = Math.max(0, w / 2 - half)
+      const ry = Math.max(0, h / 2 - half)
+      const kx = rx * KAPPA, ky = ry * KAPPA
+      return { closed: true, nodes: [
+        { x: cx,      y: cy - ry, in: { x: cx - kx, y: cy - ry }, out: { x: cx + kx, y: cy - ry } },
+        { x: cx + rx, y: cy,      in: { x: cx + rx, y: cy - ky }, out: { x: cx + rx, y: cy + ky } },
+        { x: cx,      y: cy + ry, in: { x: cx + kx, y: cy + ry }, out: { x: cx - kx, y: cy + ry } },
+        { x: cx - rx, y: cy,      in: { x: cx - rx, y: cy + ky }, out: { x: cx - rx, y: cy - ky } },
+      ] }
+    }
+    case 'triangle': return { closed: true, nodes: pointsToNodes(trianglePoints(w, h, half)) }
+    case 'polygon':  return { closed: true, nodes: pointsToNodes(regularPolygonPoints(w, h, layer.sides ?? 5, half)) }
+    case 'star':     return { closed: true, nodes: pointsToNodes(starPoints(w, h, layer.points ?? 5, layer.innerRatio ?? 0.5, half)) }
+    /* Line — 2-node open path along the bbox diagonal picked by `slope`
+     * (endpoint math mirrors the line branches in LayerRenderer/build.js). */
+    case 'line': {
+      const nodes = (layer.slope ?? '\\') === '/'
+        ? [{ x: half, y: h - half, in: null, out: null }, { x: w - half, y: half,     in: null, out: null }]
+        : [{ x: half, y: half,     in: null, out: null }, { x: w - half, y: h - half, in: null, out: null }]
+      return { closed: false, nodes }
+    }
+    default: return null
+  }
+}

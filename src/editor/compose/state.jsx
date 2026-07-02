@@ -7,7 +7,8 @@ import { PRESET_SIZES } from '../shell/aspects'
 import { buildPatternSvg } from '../modes/pattern/render'
 import { computeFrameGlyphs } from '../modes/type/buildTypeSvg'
 import { findLayerDeep } from './helpers'
-import { scalePathNodes, normalizePath, normalizePathRings } from './path-math'
+import { scalePathNodes, shiftNode, rotatePathNodes, normalizePath, normalizePathRings } from './path-math'
+import { shapeToPathNodes } from './shape-math'
 import { booleanCombine, isBooleanable } from './boolean-ops'
 import { presetById, presetParams } from '../../loops/registry'
 
@@ -556,6 +557,51 @@ export function ComposeStateProvider({ children }) {
     })
     setSelectedIds([id])
   }, [selectedIds, setLayersTracked])
+
+  /* Convert a primitive shape layer (rect / ellipse / triangle / polygon /
+   * star / line) to an editable `path` layer in place — same id, paint,
+   * opacity/blend, painted geometry. Flip flags + rotation are BAKED into
+   * the nodes (mirror-about-center then rotate-about-center, matching the
+   * DOM `rotate() scale()` order) — paths always carry transform-free
+   * geometry, same philosophy as flipLayer / node-edit entry. One-way;
+   * tracked through history, undo restores the shape. */
+  const convertShapeToPath = useCallback((layerId) => {
+    setLayersTracked((prev) => prev.map((l) => {
+      if (l.id !== layerId || l.type !== 'shape') return l
+      const geo = shapeToPathNodes(l)
+      if (!geo) return l
+      let nodes = geo.nodes
+      const cx = (l.w ?? 0) / 2
+      const cy = (l.h ?? 0) / 2
+      if (l.flipX || l.flipY) {
+        /* mirror about the box center: scale about origin + shift back. */
+        nodes = scalePathNodes(nodes, l.flipX ? -1 : 1, l.flipY ? -1 : 1)
+          .map((n) => shiftNode(n, l.flipX ? cx * 2 : 0, l.flipY ? cy * 2 : 0))
+      }
+      const rot = typeof l.rotation === 'number' ? l.rotation : 0
+      if (rot) nodes = rotatePathNodes(nodes, rot, cx, cy)
+      const norm = normalizePath(nodes)
+      return {
+        id: l.id, type: 'path', visible: l.visible ?? true,
+        opacity: l.opacity ?? 1, blend: l.blend ?? 'normal',
+        ...(l.locked ? { locked: true } : {}),
+        nodes: norm.nodes, closed: geo.closed,
+        x: (l.x ?? 0) + norm.dx, y: (l.y ?? 0) + norm.dy,
+        w: norm.w, h: norm.h,
+        /* line paints stroke-only (falling back to fill color, like its
+         * renderer); closed kinds keep fill and only stroke when the shape
+         * actually painted one. */
+        color: geo.closed ? (l.color ?? null) : null,
+        stroke: geo.closed ? (l.stroke ?? null) : (l.stroke ?? l.color ?? null),
+        strokeWidth: geo.closed
+          ? (l.stroke != null ? (l.strokeWidth ?? 0) : 0)
+          : (l.strokeWidth ?? 2),
+        ...(l.strokeDasharray ? { strokeDasharray: l.strokeDasharray } : {}),
+        ...(l.strokeLinecap   ? { strokeLinecap:   l.strokeLinecap }   : {}),
+        ...(l.strokeLinejoin  ? { strokeLinejoin:  l.strokeLinejoin }  : {}),
+      }
+    }))
+  }, [setLayersTracked])
 
   const duplicateLayer = useCallback((id) => {
     setLayersTracked((prev) => {
@@ -1137,7 +1183,7 @@ export function ComposeStateProvider({ children }) {
     /* layers */
     layers,
     addLayer, removeLayer, updateLayer, toggleLayer, toggleLayerLock, moveLayer, duplicateLayer, clearLayers, deleteSelected,
-    flipLayer, flipSelected, booleanSelected,
+    flipLayer, flipSelected, booleanSelected, convertShapeToPath,
     groupLayers, ungroupLayer, alignSelected, flattenPattern, flattenText, addFlattenedFromFrame, loadPreset, insertFromLibrary,
 
     /* history */

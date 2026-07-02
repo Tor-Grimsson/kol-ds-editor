@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import KolLogo from '../../brand/logos/KolLogo'
 import TypeBlock from '../../components/styleguide/TypeBlock'
 import { buildPatternSvg } from '../modes/pattern/render'
@@ -7,8 +7,9 @@ import { resolveColor, COVER_TYPES, useComposeState } from './state'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
 import { hasBindings, resolveLayer } from '../params/resolve'
-import { useTransportCtx } from '../params/transport'
+import { useTransportCtx, transport } from '../params/transport'
 import { loopById } from '../../loops/registry'
+import { filterById } from '../../filters'
 
 /**
  * LayerRenderer — renders a single layer as a positioned DOM element inside
@@ -53,14 +54,85 @@ export default function LayerRenderer({ layer: rawLayer, palette }) {
   switch (layer.type) {
     case 'background': return <BackgroundLayer layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'pattern':    return <PatternLayer    layer={layer} palette={palette} layerStyle={layerStyle} />
-    case 'photo':      return <PhotoLayer      layer={layer}                    layerStyle={layerStyle} />
+    case 'photo': {
+      /* Filtered photo → live filter canvas. Cropped photos (imgW set) ignore
+       * filters in v1 — the crop branch's frame-local image math doesn't
+       * compose with the fitted-source pipeline; plain photo render wins. */
+      const filter = layer.src && layer.imgW == null && layer.w != null ? filterById(layer.filterId) : null
+      if (filter?.kind === 'engine') return <EngineFilterLayer layer={layer} filter={filter} layerStyle={layerStyle} />
+      return filter
+        ? <FilteredPhotoLayer layer={layer} filter={filter} layerStyle={layerStyle} />
+        : <PhotoLayer         layer={layer}                 layerStyle={layerStyle} />
+    }
     case 'shape':      return <ShapeLayer      layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'path':       return <PathLayer       layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'text':       return <TextLayer       layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'group':      return <GroupLayer      layer={layer} palette={palette} layerStyle={layerStyle} />
-    case 'loop':       return <LoopLayer       layer={layer}                    layerStyle={layerStyle} />
+    case 'loop': {
+      const def = loopById(layer.loopId)
+      return def?.kind === 'engine'
+        ? <EngineLoopLayer layer={layer} def={def} layerStyle={layerStyle} />
+        : <LoopLayer       layer={layer}           layerStyle={layerStyle} />
+    }
     default:           return null
   }
+}
+
+/* Engine loop layer — a GL loop (three.js engine) on the same positioned-
+ * canvas host. The heavy module (three + engines) loads lazily on first
+ * mount via gl/host.js; until then the canvas is blank. Engine lifecycle
+ * is tied to loopId (family swap = rebuild); params re-apply and one frame
+ * drives on every render. drive:'dt' engines advance only while the
+ * transport plays (dt=0 repaints the held frame). */
+function EngineLoopLayer({ layer, def, layerStyle }) {
+  const canvasRef = useRef(null)
+  const rig = useRef(null)          /* { host, engine, w, h } */
+  const lastTs = useRef(null)
+  const [, forceDraw] = useState(0)
+  const tctx = useTransportCtx(true)
+
+  useEffect(() => {
+    let dead = false
+    import('../../loops/gl/host.js').then((host) => {
+      if (dead || !canvasRef.current) return
+      const engine = host.createEngine(def, canvasRef.current)
+      rig.current = { host, engine, w: 0, h: 0 }
+      forceDraw((n) => n + 1)   /* re-run the draw effect now that the rig exists */
+    })
+    return () => {
+      dead = true
+      rig.current?.host.destroyEngine(rig.current.engine)
+      rig.current = null
+      lastTs.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer.loopId])
+
+  useEffect(() => {
+    const r = rig.current
+    if (!r) return
+    const w = Math.max(1, Math.round(layer.w ?? 1))
+    const h = Math.max(1, Math.round(layer.h ?? 1))
+    if (w !== r.w || h !== r.h) { r.engine.resize(w, h); r.w = w; r.h = h }
+    r.host.applyParams(def, r.engine, layer)
+    const now = performance.now()
+    const dt = transport.isPlaying() && lastTs.current != null ? (now - lastTs.current) / 1000 : 0
+    lastTs.current = now
+    r.host.driveEngine(def, r.engine, { u: tctx.t, dt })
+  })
+
+  return (
+    <canvas
+      ref={canvasRef}
+      data-layer-id={layer.id}
+      style={{
+        position: 'absolute',
+        left: layer.x, top: layer.y, width: layer.w, height: layer.h,
+        cursor: 'move',
+        ...layerStyle,
+      }}
+    />
+  )
 }
 
 /* Loop layer — an imported generative loop (src/loops) drawn to a positioned
@@ -251,6 +323,170 @@ function PhotoLayer({ layer, layerStyle }) {
         position: 'absolute',
         ...positionStyle,
         objectFit: layer.fit ?? 'cover',
+        cursor: 'move',
+        ...layerStyle,
+      }}
+    />
+  )
+}
+
+/* Fitted-source build for filters: the layer's image drawn into a canvas at
+ * the layer's CSS-px size, honoring `fit` (cover / contain / fill). Always a
+ * FRESH canvas — filters key their per-source pixel/luma caches on canvas
+ * identity, so a rebuild must change identity. */
+function fitSource(img, w, h, fit) {
+  const c = document.createElement('canvas')
+  c.width = Math.max(1, Math.round(w))
+  c.height = Math.max(1, Math.round(h))
+  const g = c.getContext('2d')
+  const sw = img.naturalWidth || img.width
+  const sh = img.naturalHeight || img.height
+  if (fit === 'fill' || !sw || !sh) {
+    g.drawImage(img, 0, 0, c.width, c.height)
+    return c
+  }
+  const k = fit === 'contain' ? Math.min(c.width / sw, c.height / sh) : Math.max(c.width / sw, c.height / sh)
+  const dw = sw * k
+  const dh = sh * k
+  g.drawImage(img, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh)
+  return c
+}
+
+/* Filtered photo layer — the photo run through an image filter (src/filters)
+ * on a positioned <canvas>, mirroring LoopLayer's host: transport-subscribed
+ * per the filter's `animated` flag, draw runs after every render, backing =
+ * layer px × dpr. The decoded image + fitted source canvas are cached and
+ * only rebuilt when src / fit / size change. */
+function FilteredPhotoLayer({ layer, filter, layerStyle }) {
+  const canvasRef = useRef(null)
+  const imgRef = useRef(null)      /* decoded HTMLImageElement */
+  const fittedRef = useRef(null)   /* { key, canvas } */
+  const [, forceDraw] = useState(0)
+  const tctx = useTransportCtx(filter.animated !== false)
+
+  useEffect(() => {
+    let dead = false
+    const el = new Image()
+    el.onload = () => {
+      if (dead) return
+      imgRef.current = el
+      fittedRef.current = null
+      forceDraw((n) => n + 1)   /* re-run the draw effect now that pixels exist */
+    }
+    el.src = layer.src
+    return () => { dead = true; imgRef.current = null }
+  }, [layer.src])
+
+  useEffect(() => {
+    const cv = canvasRef.current
+    const img = imgRef.current
+    if (!cv || !img) return
+    const w = Math.max(1, Math.round(layer.w ?? 1))
+    const h = Math.max(1, Math.round(layer.h ?? 1))
+    const fit = layer.fit ?? 'cover'
+    const key = `${w}x${h}|${fit}`
+    if (!fittedRef.current || fittedRef.current.key !== key) {
+      fittedRef.current = { key, canvas: fitSource(img, w, h, fit) }
+    }
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    const bw = Math.round(w * dpr)
+    const bh = Math.round(h * dpr)
+    if (cv.width !== bw) cv.width = bw
+    if (cv.height !== bh) cv.height = bh
+    const g = cv.getContext('2d')
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    g.clearRect(0, 0, w, h)
+    filter.apply(g, fittedRef.current.canvas, w, h, layer, tctx.t)
+  })
+
+  return (
+    <canvas
+      ref={canvasRef}
+      data-layer-id={layer.id}
+      style={{
+        position: 'absolute',
+        left: layer.x, top: layer.y, width: layer.w, height: layer.h,
+        cursor: 'move',
+        ...layerStyle,
+      }}
+    />
+  )
+}
+
+/* Engine filter layer — a GL image filter (three.js engine, src/filters/gl)
+ * on the same host shape as EngineLoopLayer: lazy host import (three stays
+ * out of the base bundle), engine lifecycle keyed to filterId, source pushed
+ * on fitted-canvas identity change, params re-applied + one drive per render.
+ * Synth-style engines are feedback-based → free-running dt drive (advance
+ * only while the transport plays; dt=0 repaints the held frame). */
+function EngineFilterLayer({ layer, filter, layerStyle }) {
+  const canvasRef = useRef(null)
+  const rig = useRef(null)          /* { host, engine, w, h, srcCanvas } */
+  const imgRef = useRef(null)
+  const fittedRef = useRef(null)    /* { key, canvas } */
+  const lastTs = useRef(null)
+  const [, forceDraw] = useState(0)
+  const tctx = useTransportCtx(true)
+
+  useEffect(() => {
+    let dead = false
+    const el = new Image()
+    el.onload = () => {
+      if (dead) return
+      imgRef.current = el
+      fittedRef.current = null
+      forceDraw((n) => n + 1)
+    }
+    el.src = layer.src
+    return () => { dead = true; imgRef.current = null }
+  }, [layer.src])
+
+  useEffect(() => {
+    let dead = false
+    import('../../filters/gl/host.js').then((host) => {
+      if (dead || !canvasRef.current) return
+      rig.current = { host, engine: host.createEngine(filter, canvasRef.current), w: 0, h: 0, srcCanvas: null }
+      forceDraw((n) => n + 1)
+    })
+    return () => {
+      dead = true
+      rig.current?.host.destroyEngine(rig.current.engine)
+      rig.current = null
+      lastTs.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layer.filterId])
+
+  useEffect(() => {
+    const r = rig.current
+    const img = imgRef.current
+    if (!r || !img) return
+    const w = Math.max(1, Math.round(layer.w ?? 1))
+    const h = Math.max(1, Math.round(layer.h ?? 1))
+    const fit = layer.fit ?? 'cover'
+    const key = `${w}x${h}|${fit}`
+    if (!fittedRef.current || fittedRef.current.key !== key) {
+      fittedRef.current = { key, canvas: fitSource(img, w, h, fit) }
+    }
+    if (w !== r.w || h !== r.h) { r.engine.resize(w, h); r.w = w; r.h = h }
+    if (r.srcCanvas !== fittedRef.current.canvas) {
+      r.host.setSource(filter, r.engine, fittedRef.current.canvas)
+      r.srcCanvas = fittedRef.current.canvas
+    }
+    r.host.applyParams(filter, r.engine, layer)
+    const now = performance.now()
+    const dt = transport.isPlaying() && lastTs.current != null ? (now - lastTs.current) / 1000 : 0
+    lastTs.current = now
+    r.host.driveEngine(filter, r.engine, { u: tctx.t, dt })
+  })
+
+  return (
+    <canvas
+      ref={canvasRef}
+      data-layer-id={layer.id}
+      style={{
+        position: 'absolute',
+        left: layer.x, top: layer.y, width: layer.w, height: layer.h,
         cursor: 'move',
         ...layerStyle,
       }}

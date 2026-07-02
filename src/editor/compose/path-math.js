@@ -121,6 +121,95 @@ export function dist(ax, ay, bx, by) {
   return Math.hypot(ax - bx, ay - by)
 }
 
+/* Point on the segment a→b at parameter t. Corner nodes collapse their
+ * control to the anchor — same degenerate-cubic convention as pathD, so
+ * this evaluates straight segments correctly too. */
+function segPoint(a, b, t) {
+  const p1 = a.out ?? a
+  const p2 = b.in ?? b
+  const u = 1 - t
+  return {
+    x: u * u * u * a.x + 3 * u * u * t * p1.x + 3 * u * t * t * p2.x + t * t * t * b.x,
+    y: u * u * u * a.y + 3 * u * u * t * p1.y + 3 * u * t * t * p2.y + t * t * t * b.y,
+  }
+}
+
+/* Nearest parameter on the segment a→b to (px, py): coarse 32-step scan +
+ * a fine pass around the winner. Click-time hit-testing only, not a hot
+ * path — and the split lands wherever the user perceived the click, so
+ * sub-pixel exactness buys nothing. */
+export function nearestSegmentT(a, b, px, py) {
+  let bestT = 0
+  let bestD = Infinity
+  const scan = (from, to, steps) => {
+    for (let i = 0; i <= steps; i++) {
+      const t = from + ((to - from) * i) / steps
+      const p = segPoint(a, b, t)
+      const d = (p.x - px) ** 2 + (p.y - py) ** 2
+      if (d < bestD) { bestD = d; bestT = t }
+    }
+  }
+  scan(0, 1, 32)
+  scan(Math.max(0, bestT - 1 / 32), Math.min(1, bestT + 1 / 32), 16)
+  return { t: bestT, dist: Math.sqrt(bestD) }
+}
+
+/* de Casteljau split of the segment a→b at t. Returns replacement nodes
+ * { a, mid, b } — shape-preserving: the two half-cubics retrace the original
+ * curve exactly (the new node takes the interior split handles; a/b keep
+ * their far handles and get their near handles trimmed). A straight segment
+ * (both controls null) yields a handle-less mid so corners stay corners. */
+export function splitSegment(a, b, t) {
+  if (!a.out && !b.in) {
+    return {
+      a, b,
+      mid: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, in: null, out: null },
+    }
+  }
+  const p1 = a.out ?? a
+  const p2 = b.in ?? b
+  const lerp = (p, q) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t })
+  const q0 = lerp(a, p1)
+  const q1 = lerp(p1, p2)
+  const q2 = lerp(p2, b)
+  const r0 = lerp(q0, q1)
+  const r1 = lerp(q1, q2)
+  const s  = lerp(r0, r1)
+  /* A null (corner) side stays null: its split control degenerates to the
+   * anchor anyway, and a zero-length handle would just put a dead knob on
+   * top of the anchor square. */
+  return {
+    a:   { ...a, out: a.out ? q0 : null },
+    mid: { x: s.x, y: s.y, in: r0, out: r1 },
+    b:   { ...b, in: b.in ? q2 : null },
+  }
+}
+
+/* Smooth a corner anchor: mirrored handles along the neighbor chord
+ * (Illustrator convention), each sized to ~1/3 of its adjacent segment
+ * length. Open-path endpoints get a single handle toward their only
+ * neighbor. The anchor itself never moves. Returns a new node (or the
+ * original when there are no neighbors to derive a tangent from). */
+export function smoothNode(nodes, i, closed) {
+  const n = nodes[i]
+  const len = nodes.length
+  const prev = (closed || i > 0)       ? nodes[(i - 1 + len) % len] : null
+  const next = (closed || i < len - 1) ? nodes[(i + 1) % len]       : null
+  if (!prev && !next) return n
+  const dPrev = prev ? dist(n.x, n.y, prev.x, prev.y) : 0
+  const dNext = next ? dist(n.x, n.y, next.x, next.y) : 0
+  let tx = (next ?? n).x - (prev ?? n).x
+  let ty = (next ?? n).y - (prev ?? n).y
+  const tl = Math.hypot(tx, ty) || 1
+  tx /= tl
+  ty /= tl
+  return {
+    ...n,
+    in:  prev ? { x: n.x - tx * (dPrev / 3), y: n.y - ty * (dPrev / 3) } : null,
+    out: next ? { x: n.x + tx * (dNext / 3), y: n.y + ty * (dNext / 3) } : null,
+  }
+}
+
 /* ── dev self-check ─────────────────────────────────────────────────── */
 if (import.meta.env?.DEV) {
   const sq = [
@@ -134,4 +223,8 @@ if (import.meta.env?.DEV) {
   console.assert(n.dx === 10 && n.dy === 10 && n.nodes[0].x === 0 && n.nodes[0].y === 0, 'normalizePath origin')
   console.assert(pathD(sq).startsWith('M 10 10 C'), 'pathD corner→cubic')
   console.assert(pathD(sq, true).endsWith('Z'), 'pathD closed')
+  const sp = splitSegment(sq[0], sq[1], 0.5)
+  console.assert(sp.mid.x === 20 && sp.mid.y === 10 && sp.mid.in === null, 'splitSegment straight → corner mid')
+  const sm = smoothNode(sq, 1, false)
+  console.assert(sm.in && sm.out && sm.x === 30 && sm.y === 10, 'smoothNode handles, anchor fixed')
 }

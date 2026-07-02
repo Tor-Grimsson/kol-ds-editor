@@ -59,6 +59,9 @@ export const SHORTCUTS = [
   /* View */
   { id: 'show-shortcuts', combo: 'S',     label: 'Show shortcuts',          section: 'View' },
   { id: 'pan',            combo: 'Space', label: 'Hold + drag to pan',      section: 'View', passive: true },
+  /* Handled inside TransportBar (window keydown, input-guarded) — documented
+   * here for the cheat sheet only. */
+  { id: 'fps',            combo: 'F',     label: 'Toggle fps readout',      section: 'View', passive: true },
 ]
 
 const KEY_LABELS = {
