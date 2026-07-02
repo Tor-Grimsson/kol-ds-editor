@@ -130,6 +130,7 @@ export default function Canvas({
   guideColor = CANVAS_DEFAULTS.guideColor,
   align = 'center',
   panEnabled = false,
+  showGrid = true,
   children,
 }) {
   const { ratio } = resolveAspect(aspect, customRatio)
@@ -157,7 +158,7 @@ export default function Canvas({
   )
 
   if (!panEnabled) return letterbox
-  return <PanZoomViewport>{letterbox}</PanZoomViewport>
+  return <PanZoomViewport showGrid={showGrid}>{letterbox}</PanZoomViewport>
 }
 
 const ZOOM_MIN = 0.1
@@ -187,7 +188,7 @@ function zoomAt(v, factor, sx, sy) {
  * needs no zoom awareness. Pointer events on the transform layer disable
  * while Space is held so layer mousedowns don't fire mid-pan.
  */
-function PanZoomViewport({ children }) {
+function PanZoomViewport({ children, showGrid = true }) {
   const containerRef              = useRef(null)
   const [spaceHeld, setSpaceHeld] = useState(false)
   const [dragging, setDragging]   = useState(false)
@@ -329,10 +330,12 @@ function PanZoomViewport({ children }) {
       >
         {/* Oversized grid behind the letterbox — extends 2 viewport sizes
             in each direction so practical panning never reveals an edge. */}
-        <div
-          className="kol-grid-bg absolute"
-          style={{ left: '-200%', top: '-200%', width: '500%', height: '500%' }}
-        />
+        {showGrid && (
+          <div
+            className="kol-grid-bg absolute"
+            style={{ left: '-200%', top: '-200%', width: '500%', height: '500%' }}
+          />
+        )}
         <div className="relative w-full h-full">{children}</div>
       </div>
 

@@ -22,6 +22,7 @@ import ShortcutsOverlay from './shell/ShortcutsOverlay'
 function Rail({ side, panels }) {
   const header = panelsForSlot(panels, `${side}.header`)
   const body   = panelsForSlot(panels, `${side}.body`)
+  const footer = panelsForSlot(panels, `${side}.footer`)
   return (
     <aside className={`kol-editor-${side}`}>
       {header.length > 0 && (
@@ -32,6 +33,11 @@ function Rail({ side, panels }) {
       <div className="kol-editor-rail-body">
         {body.map(({ Component }, i) => <Component key={i} />)}
       </div>
+      {footer.length > 0 && (
+        <div className="kol-editor-rail-footer">
+          {footer.map(({ Component }, i) => <Component key={i} />)}
+        </div>
+      )}
     </aside>
   )
 }
@@ -39,6 +45,7 @@ function Rail({ side, panels }) {
 export default function EditorShell({ registry }) {
   const Canvas = registry?.canvas ?? null
   const canvasHeader = panelsForSlot(registry?.panels, 'canvas.header')
+  const canvasFooter = panelsForSlot(registry?.panels, 'canvas.footer')
   /* `data-editor-keep-selection` is the single marker the document-level
    * click-away handler in CanvasArea checks. Anything inside the shell
    * keeps selection on click; anything outside (sidenav, browser chrome)
@@ -58,6 +65,11 @@ export default function EditorShell({ registry }) {
           <main className="kol-editor-canvas">
             {Canvas ? <Canvas /> : null}
           </main>
+          {canvasFooter.length > 0 && (
+            <div className="kol-editor-canvas-footer">
+              {canvasFooter.map(({ Component }, i) => <Component key={i} />)}
+            </div>
+          )}
         </div>
         <Rail side="right" panels={registry?.panels} />
       </div>

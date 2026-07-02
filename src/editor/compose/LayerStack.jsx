@@ -26,6 +26,7 @@ const TYPE_ICONS = {
   shape:      'layer-shape',
   text:       'layer-text',
   group:      'layer-group',
+  loop:       'layer-loop',
 }
 
 const BLEND_MODES = [

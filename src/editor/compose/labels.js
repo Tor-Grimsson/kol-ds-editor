@@ -10,6 +10,7 @@ export const TYPE_LABELS = {
   shape:      'Shape',
   text:       'Text',
   group:      'Group',
+  loop:       'Loop',
 }
 
 export const SHAPE_KIND_LABELS = {
@@ -29,6 +30,7 @@ export function labelForLayer(layer) {
     const kind = SHAPE_KIND_LABELS[layer.kind ?? 'logo'] ?? 'Shape'
     return `Shape · ${kind}`
   }
+  if (layer.type === 'loop' && layer.presetLabel) return `Loop · ${layer.presetLabel}`
   return TYPE_LABELS[layer.type] ?? layer.type
 }
 
@@ -40,5 +42,6 @@ export function rowLabelForLayer(layer) {
   if (layer.type === 'shape') {
     return SHAPE_KIND_LABELS[layer.kind ?? 'logo'] ?? TYPE_LABELS.shape
   }
+  if (layer.type === 'loop') return layer.presetLabel || TYPE_LABELS.loop
   return TYPE_LABELS[layer.type] ?? layer.type
 }

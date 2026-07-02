@@ -131,6 +131,15 @@
    single-occupant compose rail does. */
 .kol-editor-rail-body .kol-compose-rail { height: auto; }
 
+/* Rail footer — pinned below the scrolling body (transport dock). */
+.kol-editor-rail-footer { flex: 0 0 auto; }
+
+/* Canvas footer — the timeline dock strip below the canvas main. */
+.kol-editor-canvas-footer {
+  flex: 0 0 auto;
+  background-color: var(--kol-surface-primary);
+}
+
 
 /* ───── 2. Compose rail ─────────────────────────────────────────────── */
 

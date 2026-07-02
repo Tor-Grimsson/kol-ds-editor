@@ -11,7 +11,7 @@
   "dependencies": {
     "@kolkrabbi/kol-component": "^0.1.1",
     "@kolkrabbi/kol-framework": "^0.1.1",
-    "@kolkrabbi/kol-loader": "^0.1.1",
+    "@kolkrabbi/kol-loader": "^0.2.0",
     "@kolkrabbi/kol-theme": "^0.1.1",
     "@tailwindcss/vite": "^4.2.4",
     "colord": "^2.9.3",

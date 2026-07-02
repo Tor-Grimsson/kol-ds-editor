@@ -3,16 +3,18 @@
  *
  * A mode registry is `{ canvas: ReactComponent, panels: PanelEntry[] }`
  * where PanelEntry is `{ slot, order, Component }`. Valid slots are
- * 'left.header' | 'left.body' | 'right.header' | 'right.body' |
- * 'canvas.header'. The `canvas.header` slot renders as a sub-bar above
- * the main canvas area, between the rails — used for the tool palette.
+ * 'left.header' | 'left.body' | 'left.footer' | 'right.header' |
+ * 'right.body' | 'right.footer' | 'canvas.header'. `*.footer` pins to the
+ * bottom of its rail, outside the scrolling body (used for the transport).
+ * `canvas.header` renders as a sub-bar above the main canvas — the tool
+ * palette. `canvas.footer` renders below the canvas — the timeline dock.
  *
  * Future: state-level overrides (drag-to-rearrange UI) will live in this
  * module. For v1, the registry is the only source of truth — defaults
  * ship as-is.
  */
 
-export const SLOTS = ['left.header', 'left.body', 'right.header', 'right.body', 'canvas.header']
+export const SLOTS = ['left.header', 'left.body', 'left.footer', 'right.header', 'right.body', 'right.footer', 'canvas.header', 'canvas.footer']
 
 export function panelsForSlot(panels, slot) {
   return (panels ?? [])

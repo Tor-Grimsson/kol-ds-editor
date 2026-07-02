@@ -8,7 +8,8 @@ import { useGeneratorLibrary } from '../library/LibraryProvider'
 import { STARTERS } from '../library/starters'
 import { usePatternState } from '../modes/pattern/state'
 import { useTypeState } from '../modes/type/state'
-import { buildLayersSvg, downloadComposeSvg, downloadComposePng } from '../compose/build'
+import { getFeatures } from '../registry/features'
+import { useComposeFile } from '../compose/useComposeFile'
 
 /**
  * MenuTop — top bar above the editor grid.
@@ -19,13 +20,6 @@ import { buildLayersSvg, downloadComposeSvg, downloadComposePng } from '../compo
  * each opens a dropdown panel of MenuDropdownItems.
  */
 const ASPECT_OPTIONS = ASPECTS.map((a) => ({ value: a.id, label: a.label }))
-
-const MODES = [
-  { id: 'compose', label: 'Compose' },
-  { id: 'palette', label: 'Palette' },
-  { id: 'pattern', label: 'Pattern' },
-  { id: 'type',    label: 'Type' },
-]
 
 const SLOT_META = {
   palette: { label: 'Palettes', target: 'palette' },
@@ -40,57 +34,25 @@ export default function MenuTop() {
   const {
     aspect, setAspect,
     view, setView,
-    layers, palette,
+    layers,
     canUndo, canRedo, undo, redo,
-    colors, poolId, modeId, locks,
     clearLayers,
     currentPresetId, currentPresetName,
-    setCurrentPresetId, setCurrentPresetName,
     loadPreset, loadPalette,
     snapEnabled, toggleSnap,
   } = useComposeState()
-  const { library, addItem, updateItem } = useGeneratorLibrary()
+  const { library } = useGeneratorLibrary()
   const { loadPattern } = usePatternState()
   const { loadType }    = useTypeState()
   const navigate = useNavigate()
   const { mode: currentMode } = useParams()
   const modal = useModal()
+  /* Mode menu from the feature registry — computed at render so registration
+   * (Editor's side-effect import) has already run. */
+  const modes = getFeatures().filter((f) => f.nav !== false)
 
-  const filename  = `compose-${aspect.replace(':', 'x')}-${Date.now().toString(36)}`
-  const buildArgs = { layers, palette, aspect }
-
-  const buildSpec = (name) => ({
-    intent:  'whole',
-    name:    name ?? null,
-    aspect,
-    layers,
-    palette: { poolId, modeId, colors, locks },
-  })
-
-  const onSave = async () => {
-    if (currentPresetId) {
-      updateItem('preset', currentPresetId, buildSpec(currentPresetName))
-      return
-    }
-    const name = await modal.prompt('Name this frame:', '')
-    if (name === null) return
-    const id = addItem('preset', buildSpec(name || null))
-    if (id) {
-      setCurrentPresetId(id)
-      setCurrentPresetName(name || null)
-    }
-  }
-  const onSaveAs = async () => {
-    const name = await modal.prompt('Save as:', currentPresetName ?? '')
-    if (name === null) return
-    const id = addItem('preset', buildSpec(name || null))
-    if (id) {
-      setCurrentPresetId(id)
-      setCurrentPresetName(name || null)
-    }
-  }
-  const onExportSvg = () => downloadComposeSvg(buildLayersSvg(buildArgs), `${filename}.svg`)
-  const onExportPng = () => downloadComposePng(buildLayersSvg(buildArgs), `${filename}.png`, 2)
+  /* Save / save-as / export shared with the rail EditorFooter. */
+  const { onSave, onSaveAs, onExportSvg, onExportPng } = useComposeFile()
 
   const confirmReplaceIfUnsaved = async () => {
     if (layers.length === 0) return true
@@ -124,13 +86,13 @@ export default function MenuTop() {
       <div className="flex items-center gap-1 ml-auto">
         <MenuItem label="Mode">
           <div className="py-1 w-[220px]">
-            {MODES.map((m) => (
+            {modes.map((m) => (
               <MenuDropdownItem
                 key={m.id}
                 onClick={() => navigate(`/editor/${m.id}`)}
                 shortcut={currentMode === m.id ? <EditorIcon name="check" size={11} /> : undefined}
               >
-                {m.label}
+                {m.title}
               </MenuDropdownItem>
             ))}
           </div>

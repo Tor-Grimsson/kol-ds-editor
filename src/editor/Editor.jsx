@@ -1,58 +1,36 @@
 import { useParams, Navigate } from 'react-router-dom'
 import usePageTitle from '../components/hooks/usePageTitle'
-import { ComposeStateProvider } from './compose/state'
-import { PaletteStateProvider } from './modes/palette/state'
-import { PatternStateProvider } from './modes/pattern/state'
-import { TypeStateProvider }    from './modes/type/state'
-import { ToolProvider }         from './state/tools'
-import { useGlobalShortcuts }   from './state/useGlobalShortcuts'
-import Compose from '../pages/Compose'
-import ComboLab    from './modes/palette/ComboLab'
-import PatternLab  from './modes/pattern/PatternLab'
-import TypeLab     from './modes/type/TypeLab'
+import { ToolProvider }       from './state/tools'
+import { useGlobalShortcuts } from './state/useGlobalShortcuts'
+import './registry/modes'      // side-effect: registers the mode features
+import { getFeatures, getFeature } from './registry/features'
 
 /**
  * Editor — `/editor/:mode` route component.
  *
- * Mounts every mode's state provider once, then dispatches to the
- * mode-specific body. Providers stay mounted so state persists across
- * mode switches.
+ * Mounts every feature's state provider once (order = registration order,
+ * outermost first), then dispatches to the active feature's body. Providers
+ * stay mounted so state persists across mode switches. The mode list is the
+ * feature registry — no hardcoded switch/title map here.
  */
-const MODE_TITLES = {
-  compose: 'Compose',
-  palette: 'Palette',
-  pattern: 'Pattern',
-  type:    'Type',
-}
-
 function ActiveMode() {
   const { mode } = useParams()
-  usePageTitle(MODE_TITLES[mode] ?? 'Editor')
+  const feature = getFeature(mode)
+  usePageTitle(feature?.title ?? 'Editor')
   /* Cross-mode shortcuts (undo / redo / deselect) — mounted at the route
    * level so palette / pattern / type modes get keyboard too, not just
    * Compose's CanvasArea. */
   useGlobalShortcuts()
-  switch (mode) {
-    case 'compose':  return <Compose />
-    case 'palette':  return <ComboLab />
-    case 'pattern':  return <PatternLab />
-    case 'type':     return <TypeLab />
-    default:         return <Navigate to="/editor/compose" replace />
-  }
+  if (!feature?.Body) return <Navigate to="/editor/compose" replace />
+  const Body = feature.Body
+  return <Body />
 }
 
 export default function Editor() {
-  return (
-    <ToolProvider>
-      <ComposeStateProvider>
-        <PaletteStateProvider>
-          <PatternStateProvider>
-            <TypeStateProvider>
-              <ActiveMode />
-            </TypeStateProvider>
-          </PatternStateProvider>
-        </PaletteStateProvider>
-      </ComposeStateProvider>
-    </ToolProvider>
+  /* Wrap ActiveMode in each feature's provider, outermost = first registered. */
+  const tree = getFeatures().reduceRight(
+    (children, f) => (f.Provider ? <f.Provider>{children}</f.Provider> : children),
+    <ActiveMode />,
   )
+  return <ToolProvider>{tree}</ToolProvider>
 }

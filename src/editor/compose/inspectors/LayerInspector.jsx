@@ -1,11 +1,8 @@
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import EditorButton from '../../components/EditorButton'
-import { ColorSwatch } from '@kolkrabbi/kol-component'
 import { Input } from '@kolkrabbi/kol-component'
-import { Slider } from '@kolkrabbi/kol-component'
-import { Textarea } from '@kolkrabbi/kol-component'
-import { Dropdown, PopoverPanel, usePopover } from '@kolkrabbi/kol-component'
+import { Dropdown } from '@kolkrabbi/kol-component'
 import { LabeledControl } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
 import { Icon } from '@kolkrabbi/kol-loader'
@@ -17,56 +14,18 @@ import { useColorTarget } from '../../color/useColorTarget'
 import { useGeneratorLibrary } from '../../library/LibraryProvider'
 import { usePatternState } from '../../modes/pattern/state'
 import { useTypeState } from '../../modes/type/state'
-import { WIDTHS, WEIGHTS, CASES } from '../../modes/type/cuts'
-import { SHAPE_OPTIONS } from '../../modes/pattern/shapes'
 import RuleRow, { newRule, randomRule } from '../../modes/pattern/RuleRow'
-
-const FIT_OPTIONS = [
-  { value: 'cover',    label: 'Cover' },
-  { value: 'contain',  label: 'Contain' },
-  { value: 'fill',     label: 'Fill' },
-]
-
-const PALETTE_REFS = [
-  { value: 'palette:primary',   label: 'Primary' },
-  { value: 'palette:secondary', label: 'Secondary' },
-  { value: 'palette:light',     label: 'Light' },
-  { value: 'palette:dark',      label: 'Dark' },
-  { value: 'palette:accent',    label: 'Accent' },
-  { value: 'palette:bg',        label: 'Background' },
-]
-
-const SHAPE_LOGO_VARIANTS = [
-  { value: 'logomark',    label: 'Logomark' },
-  { value: 'wordmark',    label: 'Wordmark' },
-  { value: 'lockup-hori', label: 'Lockup · horizontal' },
-  { value: 'lockup-vert', label: 'Lockup · vertical' },
-]
-
-const SHAPE_FIT_OPTIONS = [
-  { value: 'fill',    label: 'Stretch (fill)' },
-  { value: 'contain', label: 'Aspect (contain)' },
-]
-
-const SHAPE_KIND_OPTIONS = [
-  { value: 'logo',     label: 'Logo'      },
-  { value: 'rect',     label: 'Rectangle' },
-  { value: 'ellipse',  label: 'Ellipse'   },
-  { value: 'triangle', label: 'Triangle'  },
-  { value: 'line',     label: 'Line'      },
-  { value: 'polygon',  label: 'Polygon'   },
-  { value: 'star',     label: 'Star'      },
-  { value: 'flatten',  label: 'Flatten'   },
-]
-
-const WIDTH_OPTIONS  = WIDTHS.map((w)  => ({ value: w.id,  label: w.label }))
-const WEIGHT_OPTIONS = WEIGHTS.map((w) => ({ value: w.id,  label: w.label }))
-const CASE_OPTIONS   = CASES.map((c)   => ({ value: c.id,  label: c.label }))
-const ALIGN_OPTIONS  = [
-  { value: 'left',   label: 'Left'   },
-  { value: 'center', label: 'Center' },
-  { value: 'right',  label: 'Right'  },
-]
+import { ColorField } from './ColorField'
+import AutoControls from '../../params/AutoControls'
+import BindDot from '../../params/BindDot'
+import { SHAPE_SCHEMA } from '../../params/schemas/shape'
+import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
+import { TEXT_SCHEMA } from '../../params/schemas/text'
+import { PHOTO_SCHEMA } from '../../params/schemas/photo'
+import { GROUPS, loopById, presetsInGroup } from '../../../loops/registry'
+import { presetParams } from '../../../loops/registry'
+import { themeParams } from '../../../loops/theme'
+import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
 
 /**
  * LayerInspector — per-type knobs for the selected layer.
@@ -88,6 +47,9 @@ export default function LayerInspector({ layer }) {
   const edit = useLayerEdit(layer.id, { history: 'coalesce' })
   const setProp = edit.setProp
 
+  /* Per-field animate affordance (AutoControls' renderAnimate seam). */
+  const renderAnimate = (p) => <BindDot layer={layer} param={p} setProp={setProp} />
+
   return (
     <div className="flex flex-col gap-4">
       {!COVER_TYPES.includes(layer.type) && (
@@ -99,11 +61,16 @@ export default function LayerInspector({ layer }) {
           <div className="flex items-center gap-2">
             <AxisField
               label="R"
-              value={Math.round(layer.rotation ?? 0)}
+              value={typeof layer.rotation === 'number' ? Math.round(layer.rotation) : 0}
               onChange={(e) => {
                 const n = Number(e.target.value)
                 setProp('rotation', Number.isFinite(n) ? ((Math.round(n) % 360) + 360) % 360 : 0)
               }}
+            />
+            <BindDot
+              layer={layer}
+              param={{ key: 'rotation', label: 'Rotation', type: 'range', min: 0, max: 360, default: 0 }}
+              setProp={setProp}
             />
             <div className="flex items-center gap-1 shrink-0">
               <FlipButton axis="h" layer={layer} flipLayer={flipLayer} />
@@ -136,90 +103,108 @@ export default function LayerInspector({ layer }) {
       )}
 
       {layer.type === 'shape' && (
-        <LabeledControl label="Kind">
-          <Dropdown
-            variant="subtle"
-            size="sm"
-            className="w-full"
-            options={SHAPE_KIND_OPTIONS}
-            value={layer.kind ?? 'logo'}
-            onChange={(v) => setProp('kind', v)}
-          />
-        </LabeledControl>
-      )}
-
-      {layer.type === 'shape' && (layer.kind ?? 'logo') === 'logo' && (
-        <LabeledControl label="Variant">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={SHAPE_LOGO_VARIANTS} value={layer.variant} onChange={(v) => setProp('variant', v)} />
-        </LabeledControl>
-      )}
-
-      {layer.type === 'shape' && layer.kind === 'flatten' && (
-        <LabeledControl label="Fit">
-          <ViewToggle
-            options={SHAPE_FIT_OPTIONS}
-            viewMode={layer.fit ?? 'fill'}
-            onViewChange={(v) => setProp('fit', v)}
-          />
-        </LabeledControl>
-      )}
-
-      {layer.type === 'shape' && layer.kind === 'polygon' && (
-        <LabeledControl label="Sides">
-          <Slider
-            min={3} max={12} step={1}
-            value={layer.sides ?? 5}
-            formatValue={(v) => `${v}`}
-            onChange={(v) => setProp('sides', v)}
-          />
-        </LabeledControl>
-      )}
-
-      {layer.type === 'shape' && layer.kind === 'star' && (
-        <>
-          <LabeledControl label="Points">
-            <Slider
-              min={3} max={12} step={1}
-              value={layer.points ?? 5}
-              formatValue={(v) => `${v}`}
-              onChange={(v) => setProp('points', v)}
-            />
-          </LabeledControl>
-          <LabeledControl label="Inner ratio">
-            <Slider
-              min={0.2} max={0.9} step={0.05}
-              value={layer.innerRatio ?? 0.5}
-              formatValue={(v) => v.toFixed(2)}
-              onChange={(v) => setProp('innerRatio', v)}
-            />
-          </LabeledControl>
-        </>
-      )}
-
-      {layer.type === 'shape' && layer.kind === 'line' && (
-        <LabeledControl label="Slope">
-          <ViewToggle
-            options={[
-              { value: '\\', label: '↘' },
-              { value: '/',  label: '↗' },
-            ]}
-            viewMode={layer.slope ?? '\\'}
-            onViewChange={(v) => setProp('slope', v)}
-          />
-        </LabeledControl>
+        <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
       )}
 
       {layer.type === 'text' && (
-        <TextFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} />
+        <TextFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />
       )}
 
-      {layer.type === 'pattern' && <PatternFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} />}
-      {layer.type === 'photo' && <ImageFields layer={layer} setProp={setProp} />}
+      {layer.type === 'pattern' && <PatternFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
+      {layer.type === 'photo' && <ImageFields layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />}
+      {layer.type === 'loop' && <LoopFields layer={layer} setProp={setProp} updateLayer={updateLayer} palette={palette} renderAnimate={renderAnimate} />}
 
       {layer.type === 'group' && (
         <GroupFields layer={layer} ungroupLayer={ungroupLayer} />
       )}
     </div>
+  )
+}
+
+/**
+ * LoopFields — the loop layer's control surface (plan.md Phase 3): category →
+ * preset picker (labs Loops page model: 2 groups × N presets), the loop's own
+ * declared params auto-rendered (with bind dots — loop knobs are animatable
+ * like any layer prop), theme recolour, randomise.
+ */
+function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
+  const loop = loopById(layer.loopId)
+  const group = layer.loopGroup ?? 'shape'
+  const presets = presetsInGroup(group)
+  const groupOptions = GROUPS.map((g) => ({ value: g.id, label: g.label }))
+  const presetOptions = presets.map((p) => ({ value: p.id, label: p.label }))
+
+  /* Picking a preset resets the loop's params to the preset's full set
+   * (labs semantic — a preset is a curated starting point, not a patch). */
+  const applyPreset = (preset, g = group) => {
+    if (!preset) return
+    updateLayer(layer.id, {
+      loopGroup:   g,
+      presetId:    preset.id,
+      presetLabel: preset.label,
+      loopId:      preset.loop,
+      ...presetParams(preset),
+    })
+  }
+  const onGroup = (g) => applyPreset(presetsInGroup(g)[0], g)
+
+  /* Theme — recolour roled color params (bg/fg/accent) via the imported
+   * loops theme module. Non-roled params and user edits survive. */
+  const themeId = layer.themeId ?? DEFAULT_THEME
+  const invert = !!layer.themeInvert
+  const onTheme  = (id) => updateLayer(layer.id, { themeId: id, ...themeParams(layer, loop?.params, id, invert) })
+  const onInvert = (v)  => updateLayer(layer.id, { themeInvert: v, ...themeParams(layer, loop?.params, themeId, v) })
+
+  const onRandomise = () => {
+    const patch = {}
+    for (const p of loop?.params ?? []) {
+      if (p.noRandom) continue
+      if (p.type === 'range') {
+        const step = p.step ?? 1
+        const raw = p.min + Math.random() * (p.max - p.min)
+        patch[p.key] = Math.min(p.max, Math.max(p.min, Number((Math.round(raw / step) * step).toFixed(4))))
+      } else if (p.type === 'toggle') {
+        patch[p.key] = Math.random() < 0.5
+      } else if (p.type === 'select' && p.options?.length) {
+        patch[p.key] = p.options[Math.floor(Math.random() * p.options.length)].value
+      }
+    }
+    updateLayer(layer.id, patch)
+  }
+
+  return (
+    <>
+      <LabeledControl label="Category">
+        <Dropdown variant="subtle" size="sm" className="w-full" options={groupOptions} value={group} onChange={onGroup} />
+      </LabeledControl>
+      <LabeledControl label="Preset">
+        <Dropdown
+          variant="subtle" size="sm" className="w-full"
+          options={presetOptions}
+          value={layer.presetId}
+          onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
+        />
+      </LabeledControl>
+
+      <AutoControls schema={loop?.params ?? []} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+
+      <div className="grid grid-cols-2 gap-2">
+        <LabeledControl label="Theme">
+          <Dropdown variant="subtle" size="sm" className="w-full" options={THEME_OPTIONS} value={themeId} onChange={onTheme} />
+        </LabeledControl>
+        <LabeledControl label="Invert">
+          <ViewToggle
+            options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
+            viewMode={invert ? 'on' : 'off'}
+            onViewChange={(v) => onInvert(v === 'on')}
+          />
+        </LabeledControl>
+      </div>
+
+      <EditorButton variant="primary" size="sm" className="w-full" onClick={onRandomise}>
+        Randomise
+      </EditorButton>
+    </>
   )
 }
 
@@ -251,7 +236,7 @@ function GroupFields({ layer, ungroupLayer }) {
  * save slot) and copies params into the layer. "Save to library" sends the
  * current layer's params back the other way — symmetric with Type Lab.
  */
-function PatternFields({ layer, setProp, updateLayer, palette }) {
+function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
   const { library, savePattern } = useGeneratorLibrary()
   const { flattenPattern }       = useComposeState()
   const { loadPattern }          = usePatternState()
@@ -352,75 +337,7 @@ function PatternFields({ layer, setProp, updateLayer, palette }) {
         </LabeledControl>
       )}
 
-      <LabeledControl label="Shape">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={SHAPE_OPTIONS}
-          value={layer.shapeId}
-          onChange={(v) => setProp('shapeId', v)}
-        />
-      </LabeledControl>
-
-      {layer.shapeId === 'custom' && (
-        <LabeledControl label="Custom SVG">
-          <Textarea
-            variant="ghost" size="sm" rows={3}
-            value={layer.customSvg ?? ''}
-            onChange={(e) => setProp('customSvg', e.target.value)}
-            placeholder='<svg viewBox="0 0 24 24">…</svg>'
-          />
-        </LabeledControl>
-      )}
-
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledControl label="Cols" hint={`${layer.cols}`}>
-          <Slider min={1} max={32} value={layer.cols} onChange={(v) => setProp('cols', v)} />
-        </LabeledControl>
-        <LabeledControl label="Rows" hint={`${layer.rows}`}>
-          <Slider min={1} max={32} value={layer.rows} onChange={(v) => setProp('rows', v)} />
-        </LabeledControl>
-      </div>
-
-      <LabeledControl label="Gap" hint={`${layer.gap}px`}>
-        <Slider min={-64} max={64} value={layer.gap} onChange={(v) => setProp('gap', v)} />
-      </LabeledControl>
-
-      <LabeledControl label="Padding" hint={`${layer.padding}px`}>
-        <Slider min={-128} max={128} value={layer.padding} onChange={(v) => setProp('padding', v)} />
-      </LabeledControl>
-
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledControl label="Stretch">
-          <ViewToggle
-            options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
-            viewMode={layer.stretch ? 'on' : 'off'}
-            onViewChange={(v) => setProp('stretch', v === 'on')}
-          />
-        </LabeledControl>
-        <LabeledControl label="Overflow">
-          <ViewToggle
-            options={[{ value: 'clip', label: 'Clip' }, { value: 'visible', label: 'Visible' }]}
-            viewMode={layer.overflow ? 'visible' : 'clip'}
-            onViewChange={(v) => setProp('overflow', v === 'visible')}
-          />
-        </LabeledControl>
-      </div>
-
-      <LabeledControl label="Tile bg">
-        <ViewToggle
-          options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
-          viewMode={layer.bgOn ? 'on' : 'off'}
-          onViewChange={(v) => setProp('bgOn', v === 'on')}
-        />
-      </LabeledControl>
-
-      {layer.bgOn && (
-        <ColorField label="Tile bg color" value={layer.bg} onChange={(v) => setProp('bg', v)} palette={palette} />
-      )}
-
-      <LabeledControl label="Tile size" hint={`${layer.scale}px`}>
-        <Slider min={64} max={1024} step={16} value={layer.scale} onChange={(v) => setProp('scale', v)} />
-      </LabeledControl>
+      <AutoControls schema={PATTERN_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
 
       <LabeledControl label={`Rules · ${rules.length}`}>
         <div className="flex flex-col gap-2">
@@ -462,7 +379,7 @@ function PatternFields({ layer, setProp, updateLayer, palette }) {
   )
 }
 
-function ImageFields({ layer, setProp }) {
+function ImageFields({ layer, setProp, palette, renderAnimate }) {
   const fileRef = useRef(null)
   const onPick = (e) => {
     const file = e.target.files?.[0]
@@ -509,9 +426,7 @@ function ImageFields({ layer, setProp }) {
           )}
         </div>
       </LabeledControl>
-      <LabeledControl label="Fit">
-        <Dropdown variant="subtle" size="sm" className="w-full" options={FIT_OPTIONS} value={layer.fit ?? 'cover'} onChange={(v) => setProp('fit', v)} />
-      </LabeledControl>
+      <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
     </>
   )
 }
@@ -523,7 +438,7 @@ function ImageFields({ layer, setProp }) {
  * (saves from Type Lab). Picking a spec copies its typography fields into
  * the layer (no live link — layer stays self-contained).
  */
-function TextFields({ layer, setProp, updateLayer, palette }) {
+function TextFields({ layer, setProp, updateLayer, palette, renderAnimate }) {
   const { library } = useGeneratorLibrary()
   const { flattenText } = useComposeState()
   const { loadType } = useTypeState()
@@ -587,52 +502,7 @@ function TextFields({ layer, setProp, updateLayer, palette }) {
         </LabeledControl>
       )}
 
-      <LabeledControl label="Content">
-        <Textarea
-          variant="ghost"
-          size="sm"
-          rows={2}
-          value={layer.text ?? ''}
-          onChange={(e) => setProp('text', e.target.value)}
-        />
-      </LabeledControl>
-
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledControl label="Cut">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={WIDTH_OPTIONS} value={layer.width ?? 'Tight'} onChange={(v) => setProp('width', v)} />
-        </LabeledControl>
-        <LabeledControl label="Weight">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={WEIGHT_OPTIONS} value={layer.weight ?? 600} onChange={(v) => setProp('weight', Number(v))} />
-        </LabeledControl>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <LabeledControl label="Case">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={CASE_OPTIONS} value={layer.case ?? 'original'} onChange={(v) => setProp('case', v)} />
-        </LabeledControl>
-        <LabeledControl label="Align">
-          <Dropdown variant="subtle" size="sm" className="w-full" options={ALIGN_OPTIONS} value={layer.textAlign ?? 'center'} onChange={(v) => setProp('textAlign', v)} />
-        </LabeledControl>
-      </div>
-
-      <LabeledControl label="Italic">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
-          value={layer.italic ? 'on' : 'off'}
-          onChange={(v) => setProp('italic', v === 'on')}
-        />
-      </LabeledControl>
-
-      <LabeledControl label="Size" hint={`${layer.size}px`}>
-        <Slider min={12} max={400} step={1} value={layer.size} onChange={(v) => setProp('size', v)} />
-      </LabeledControl>
-      <LabeledControl label="Tracking" hint={`${(layer.tracking ?? 0).toFixed(3)}em`}>
-        <Slider min={-0.05} max={0.2} step={0.005} value={layer.tracking ?? 0} onChange={(v) => setProp('tracking', v)} />
-      </LabeledControl>
-      <LabeledControl label="Leading" hint={(layer.lineHeight ?? 1).toFixed(2)}>
-        <Slider min={0.85} max={2.0} step={0.05} value={layer.lineHeight ?? 1.05} onChange={(v) => setProp('lineHeight', v)} />
-      </LabeledControl>
+      <AutoControls schema={TEXT_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
 
       <div className="grid grid-cols-2 gap-2">
         <EditorButton variant="secondary" size="sm" className="w-full" onClick={onEditInTypeMode}
@@ -774,75 +644,7 @@ function PositionFields({ layer, setProp, patch }) {
   )
 }
 
-/**
- * ColorField — swatch button + inline hex input. The swatch shows the
- * resolved color; the hex input lets the user type a literal hex without
- * opening anything. Click the swatch to open a popover with the palette-ref
- * grid (Primary / Secondary / Light / Dark / Accent). Drives both the
- * inspector and (via the same target) the always-mounted ColorModal.
- */
-export function ColorField({ value, onChange, palette, label = 'Color', hideLabel = false }) {
-  const isPaletteRef = typeof value === 'string' && value.startsWith('palette:')
-  const isNone       = value == null
-  const resolved     = resolveColor(value, palette) ?? '#FFFFFF'
-  const subtitle     = isNone
-    ? 'None'
-    : isPaletteRef
-      ? (PALETTE_REFS.find((r) => r.value === value)?.label ?? value)
-      : resolved.toUpperCase()
-  const isStroke     = label === 'Stroke'
-
-  const [open, setOpen] = useState(false)
-  const popover = usePopover({ open, onOpenChange: setOpen, placement: 'bottom-start', offset: 4 })
-
-  return (
-    <LabeledControl label={hideLabel ? null : label}>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          ref={popover.refs.setReference}
-          {...popover.getReferenceProps()}
-          aria-label={`${label}: ${subtitle}`}
-          className="inline-flex items-center shrink-0"
-        >
-          <ColorSwatch
-            hex={resolved}
-            size={32}
-            showTransparent={isNone}
-            transparentTone={isStroke ? 'error' : 'warning'}
-            hoverable={false}
-          />
-        </button>
-        <Input
-          variant="ghost"
-          size="sm"
-          prefix="#"
-          chars={6}
-          uppercase
-          value={resolved.replace(/^#/, '').toUpperCase()}
-          onChange={(e) => onChange('#' + e.target.value.replace(/^#/, '').toUpperCase())}
-        />
-      </div>
-      <PopoverPanel
-        popover={popover}
-        panel={false}
-        focus={false}
-        className="bg-surface-secondary border border-fg-08 rounded p-2 flex flex-col gap-2 shadow-lg"
-        style={{ minWidth: 200 }}
-      >
-        <div className="grid grid-cols-6 gap-1">
-          {PALETTE_REFS.map((ref) => (
-            <ColorSwatch
-              key={ref.value}
-              hex={resolveColor(ref.value, palette) ?? '#000000'}
-              size="fill"
-              selected={value === ref.value}
-              title={ref.label}
-              onClick={() => { onChange(ref.value); setOpen(false) }}
-            />
-          ))}
-        </div>
-      </PopoverPanel>
-    </LabeledControl>
-  )
-}
+/* ColorField extracted to ./ColorField; re-exported (imported at top) so
+ * existing importers (CanvasInspector, TypeControls, pattern/ColorPicker)
+ * keep working. */
+export { ColorField }

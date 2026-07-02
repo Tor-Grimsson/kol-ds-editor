@@ -31,7 +31,9 @@ export default function SelectionOverlay({ layer, showHandles = true, showLabel 
 
   const { x, y, w, h } = layer
   const handleSize = HANDLE_SIZE / zoom
-  const rot = layer.rotation ?? 0
+  /* rotation may be a binding object (animated); chrome uses the base 0 —
+   * editing chrome on animated props is a v1 limitation. */
+  const rot = typeof layer.rotation === 'number' ? layer.rotation : 0
 
   return (
     <div

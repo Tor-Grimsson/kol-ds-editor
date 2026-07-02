@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Canvas, { CANVAS_VIRTUAL_W } from '../shell/Canvas'
-import { ASPECTS } from '../shell/aspects'
 import { useComposeState, resolveColor, COVER_TYPES, CANVAS_W } from './state'
 import LayerRenderer from './LayerRenderer'
 import SelectionOverlay from './SelectionOverlay'
@@ -63,6 +62,7 @@ function hexWithAlpha(hex, alpha) {
 export default function CanvasArea() {
   const {
     aspect, view, layers, palette,
+    canvasRatio, showGrid,
     canvasFill, canvasFillOpacity,
     selectedId, selectedIds, select, toggleSelection, selectMany,
     addLayer,
@@ -176,10 +176,11 @@ export default function CanvasArea() {
     img.src = layer.src
   }, [select, updateLayer])
 
-  /* Virtual canvas height for the active aspect — sizes the pen/node SVG
-   * overlays' viewBox so their coords match the layer coord space (no Y
-   * distortion on non-square aspects). */
-  const viewH = CANVAS_VIRTUAL_W / ((ASPECTS.find((a) => a.id === aspect)?.ratio) ?? 1)
+  /* Virtual canvas height for the active canvas ratio — sizes the pen/node
+   * SVG overlays' viewBox so their coords match the layer coord space (no Y
+   * distortion on non-square canvases). Ratio comes from the real pixel
+   * dimensions (canvasW/canvasH), so custom sizes work too. */
+  const viewH = CANVAS_VIRTUAL_W / (canvasRatio || 1)
 
   /* Commit the pen draft to a `path` layer. <2 nodes = nothing drawable →
    * just drop back to Select. Nodes are re-origined so the layer's {x,y,w,h}
@@ -310,7 +311,7 @@ export default function CanvasArea() {
           layerId: selectedLayer.id,
           cx, cy,
           startAngle: Math.atan2(vy - cy, vx - cx),
-          startRot: selectedLayer.rotation ?? 0,
+          startRot: typeof selectedLayer.rotation === 'number' ? selectedLayer.rotation : 0,
         })
         return
       }
@@ -324,7 +325,7 @@ export default function CanvasArea() {
            * toggle it via the inspector mid-drag without breaking the
            * in-flight resize. null/undefined = unlocked. */
           aspectLocked: selectedLayer.aspectLocked,
-          rotation: selectedLayer.rotation ?? 0,
+          rotation: typeof selectedLayer.rotation === 'number' ? selectedLayer.rotation : 0,
           /* Crop rect snapshot (photo layers) — scales with the frame so a
            * cropped photo resizes like an uncropped one. */
           imgX: selectedLayer.imgX, imgY: selectedLayer.imgY,
@@ -637,7 +638,7 @@ export default function CanvasArea() {
    * prop) — node editing always operates on rotation-free geometry, same
    * philosophy as flip-baking. One discrete history entry for the bake. */
   const enterNodeEdit = useCallback((layer) => {
-    const rot = layer.rotation ?? 0
+    const rot = typeof layer.rotation === 'number' ? layer.rotation : 0
     if (rot && Array.isArray(layer.nodes)) {
       const cx = (layer.w ?? 0) / 2
       const cy = (layer.h ?? 0) / 2
@@ -970,7 +971,7 @@ export default function CanvasArea() {
       : 'default'
   return (
     <div
-      className="w-full h-full"
+      className="relative w-full h-full"
       style={{ cursor: wrapperCursor }}
       /* Zoom tool — click zooms in at the pointer, Alt+click zooms out.
        * Lives on the wrapper so the dark backdrop zooms too; the viewport
@@ -982,7 +983,7 @@ export default function CanvasArea() {
         }))
       } : undefined}
     >
-      <Canvas aspect={aspect} bgColor={bgColor ?? undefined} panEnabled>
+      <Canvas aspect={aspect} customRatio={canvasRatio} bgColor={bgColor ?? undefined} showGrid={showGrid} panEnabled>
         <div
           ref={stageRef}
           data-tool={tool}

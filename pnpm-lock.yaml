@@ -15,8 +15,8 @@ importers:
         specifier: ^0.1.1
         version: 0.1.1(react-dom@19.2.7(react@19.2.7))(react-router-dom@7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       '@kolkrabbi/kol-loader':
-        specifier: ^0.1.1
-        version: 0.1.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^0.2.0
+        version: 0.2.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@kolkrabbi/kol-theme':
         specifier: ^0.1.1
         version: 0.1.1
@@ -192,6 +192,12 @@ packages:
 
   '@kolkrabbi/kol-loader@0.1.1':
     resolution: {integrity: sha512-cbSqtSMdWmjJhzDWKop0EcWLBfWhYVx39k8lgkFvv6m5sXPPDo/DzVKZU9wyniOTWnX4V7ipayLybzA5+Sw00A==}
+    peerDependencies:
+      react: ^18.3.0 || ^19.0.0
+      react-dom: ^18.3.0 || ^19.0.0
+
+  '@kolkrabbi/kol-loader@0.2.0':
+    resolution: {integrity: sha512-JECR6G+c4ASqh4EW5fjibDa+Os3ey4/OQkB90SBWxlUp4g3BYmsQJf83mSM+MiR8vl0dqD6T7/wkkiZgiH0jpA==}
     peerDependencies:
       react: ^18.3.0 || ^19.0.0
       react-dom: ^18.3.0 || ^19.0.0
@@ -1084,6 +1090,11 @@ snapshots:
       react-router-dom: 7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
 
   '@kolkrabbi/kol-loader@0.1.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
+    dependencies:
+      react: 19.2.7
+      react-dom: 19.2.7(react@19.2.7)
+
+  '@kolkrabbi/kol-loader@0.2.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
       react: 19.2.7
       react-dom: 19.2.7(react@19.2.7)

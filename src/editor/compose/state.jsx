@@ -3,11 +3,13 @@ import { useModal } from '@kolkrabbi/kol-component'
 import { POOLS } from '../modes/palette/pools'
 import { generatePalette } from '../modes/palette/colorMath'
 import { DEFAULT_SHAPE_ID, getShapeSvg } from '../modes/pattern/shapes'
+import { PRESET_SIZES } from '../shell/aspects'
 import { buildPatternSvg } from '../modes/pattern/render'
 import { computeFrameGlyphs } from '../modes/type/buildTypeSvg'
 import { findLayerDeep } from './helpers'
 import { scalePathNodes, normalizePath, normalizePathRings } from './path-math'
 import { booleanCombine, isBooleanable } from './boolean-ops'
+import { presetById, presetParams } from '../../loops/registry'
 
 /* Layer types that own a `color` (and may own a `stroke`). Single source
  * of truth — `useColorTarget` and the inspector both consult this set
@@ -168,6 +170,7 @@ export const LAYER_TYPES = [
   { id: 'photo',      label: 'Photo' },
   { id: 'shape',      label: 'Shape' },
   { id: 'text',       label: 'Text' },
+  { id: 'loop',       label: 'Loop' },
 ]
 
 const layerDefaults = (type) => {
@@ -181,6 +184,19 @@ const layerDefaults = (type) => {
     case 'pattern':    return fullCanvas({ ...PATTERN_DEFAULTS, color: 'palette:secondary' })
     case 'photo':      return fullCanvas({ src: null, fit: 'cover' })
     case 'shape':      return placed(200, 200, { kind: 'logo', variant: 'logomark', fit: 'fill', color: 'palette:dark' })
+    /* Loop layer — an imported generative loop (src/loops). Preset params
+     * spread FLAT onto the layer so the binding/timeline machinery works on
+     * them like any other prop. */
+    case 'loop': {
+      const preset = presetById()   /* first preset (Circle morph) */
+      return placed(480, 480, {
+        loopGroup:   'shape',
+        presetId:    preset.id,
+        presetLabel: preset.label,
+        loopId:      preset.loop,
+        ...presetParams(preset),
+      })
+    }
     case 'text':       return placed(600, 120, { ...TEXT_DEFAULTS, text: 'New text', color: 'palette:dark' })
     /* path geometry comes from the pen tool via `extras`; these are just
      * safe fallbacks so a bare addLayer('path') never yields undefined nodes. */
@@ -190,8 +206,32 @@ const layerDefaults = (type) => {
 }
 
 export function ComposeStateProvider({ children }) {
-  /* ─── Frame: aspect ─── */
-  const [aspect, setAspect] = useState('1:1')
+  /* ─── Frame: aspect + canvas dimensions ───
+   * `aspect` is the preset label (or 'custom'); `canvasW`/`canvasH` are the
+   * real pixel output dimensions. The 1080-virtual coordinate space is
+   * unchanged — canvasW/H only drive the frame RATIO (canvasW/canvasH) and
+   * the export resolution. Presets set both in lockstep via setAspect;
+   * custom sizing writes W/H directly and flips aspect to 'custom', so
+   * there's one write path and no ratio drift. */
+  const [aspect, setAspectState] = useState('1:1')
+  const [canvasW, setCanvasW] = useState(1080)
+  const [canvasH, setCanvasH] = useState(1080)
+  const canvasRatio = canvasW / canvasH
+
+  const setAspect = useCallback((id) => {
+    setAspectState(id)
+    const sz = PRESET_SIZES[id]
+    if (sz) { setCanvasW(sz.w); setCanvasH(sz.h) }
+  }, [])
+  const setCanvasSize = useCallback((w, h) => {
+    const cw = Math.max(16, Math.round(w) || 0)
+    const ch = Math.max(16, Math.round(h) || 0)
+    setCanvasW(cw); setCanvasH(ch); setAspectState('custom')
+  }, [])
+
+  /* ─── Frame: grid backdrop ─── */
+  const [showGrid, setShowGrid] = useState(true)
+  const toggleGrid = useCallback(() => setShowGrid((g) => !g), [])
 
   /* ─── Frame: view ─── */
   /* 'single' renders the canvas at the active aspect.
@@ -831,7 +871,14 @@ export function ComposeStateProvider({ children }) {
    * the loaded palette. Tracked through history; undo restores. */
   const loadPreset = useCallback((preset) => {
     if (!preset) return
-    if (preset.aspect) setAspect(preset.aspect)
+    /* Raw setters so a saved custom canvas keeps its stored W/H. Presets
+     * without explicit dims fall back to the aspect preset table. */
+    if (preset.aspect) setAspectState(preset.aspect)
+    if (typeof preset.canvasW === 'number' && typeof preset.canvasH === 'number') {
+      setCanvasW(preset.canvasW); setCanvasH(preset.canvasH)
+    } else if (preset.aspect && PRESET_SIZES[preset.aspect]) {
+      setCanvasW(PRESET_SIZES[preset.aspect].w); setCanvasH(PRESET_SIZES[preset.aspect].h)
+    }
     if (preset.palette) {
       if (preset.palette.poolId) setPoolId(preset.palette.poolId)
       if (preset.palette.modeId) setModeId(preset.palette.modeId)
@@ -939,7 +986,12 @@ export function ComposeStateProvider({ children }) {
     ;(async () => {
       const ok = await modal.confirm('Restore your last canvas? You had unsaved work from your previous session.')
       if (ok) {
-        if (draft.aspect) setAspect(draft.aspect)
+        /* Raw setters, not the smart setAspect — a saved 'custom' canvas
+         * must keep its stored W/H, not snap back to a preset table entry. */
+        if (draft.aspect) setAspectState(draft.aspect)
+        if (typeof draft.canvasW === 'number') setCanvasW(draft.canvasW)
+        if (typeof draft.canvasH === 'number') setCanvasH(draft.canvasH)
+        if (typeof draft.showGrid === 'boolean') setShowGrid(draft.showGrid)
         if (draft.canvas) {
           if (draft.canvas.fill !== undefined)        setCanvasFill(draft.canvas.fill)
           if (typeof draft.canvas.fillOpacity === 'number') setCanvasFillOpacity(draft.canvas.fillOpacity)
@@ -972,6 +1024,7 @@ export function ComposeStateProvider({ children }) {
         }
         const draft = {
           aspect,
+          canvasW, canvasH, showGrid,
           layers,
           canvas:  { fill: canvasFill, fillOpacity: canvasFillOpacity },
           palette: { poolId, modeId, colors, locks },
@@ -981,7 +1034,7 @@ export function ComposeStateProvider({ children }) {
       } catch { /* quota / disabled storage: ignore */ }
     }, 500)
     return () => clearTimeout(t)
-  }, [layers, aspect, canvasFill, canvasFillOpacity, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
+  }, [layers, aspect, canvasW, canvasH, showGrid, canvasFill, canvasFillOpacity, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
 
   /* Move a layer so it ends up at array position `toIndex` post-move. */
   const moveLayer = useCallback((id, toIndex) => {
@@ -1007,8 +1060,10 @@ export function ComposeStateProvider({ children }) {
     /* loaded preset tracking */
     currentPresetId, currentPresetName, setCurrentPresetId, setCurrentPresetName,
 
-    /* aspect + view */
+    /* aspect + canvas dimensions + view */
     aspect, setAspect,
+    canvasW, canvasH, canvasRatio, setCanvasSize,
+    showGrid, setShowGrid, toggleGrid,
     view, setView,
 
     /* canvas fill (bottom-most "layer") */

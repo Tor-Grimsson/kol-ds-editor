@@ -4,12 +4,12 @@ import { useComposeState } from '../../compose/state'
 import PaletteInspector from '../../compose/inspectors/PaletteInspector'
 import InspectorRail from '../../compose/InspectorRail'
 
-const TABS = ['Palette', 'Inspector']
+const TABS = ['Inspector', 'Palette']
 
 /**
- * SelectionPalettePanel — right.body. Two tabs (Palette · Inspector) sharing
- * one shell. Palette tab shows the active palette controls (frame-level);
- * Inspector tab shows selection-driven layer/frame editor.
+ * SelectionPalettePanel — right.body. Two tabs (Inspector · Palette) sharing
+ * one shell. Inspector (default) shows the selection-driven layer/frame
+ * editor; Palette shows the active palette controls (frame-level).
  *
  * Auto-flip: when the user selects a real layer, the active tab flips to
  * Inspector. Canvas-row clicks are skipped — selecting Canvas means the
@@ -18,7 +18,7 @@ const TABS = ['Palette', 'Inspector']
  */
 export default function SelectionPalettePanel() {
   const { selectedId } = useComposeState()
-  const [tab, setTab]  = useState('Palette')
+  const [tab, setTab]  = useState('Inspector')
 
   useEffect(() => {
     if (selectedId && selectedId !== 'canvas') setTab('Inspector')

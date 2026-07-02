@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import KolLogo from '../../brand/logos/KolLogo'
 import TypeBlock from '../../components/styleguide/TypeBlock'
 import { buildPatternSvg } from '../modes/pattern/render'
@@ -6,6 +6,9 @@ import { getShapeSvg } from '../modes/pattern/shapes'
 import { resolveColor, COVER_TYPES, useComposeState } from './state'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
+import { hasBindings, resolveLayer } from '../params/resolve'
+import { useTransportCtx } from '../params/transport'
+import { loopById } from '../../loops/registry'
 
 /**
  * LayerRenderer — renders a single layer as a positioned DOM element inside
@@ -20,7 +23,16 @@ import { pathD } from './path-math'
  * router can identify the target.
  */
 
-export default function LayerRenderer({ layer, palette }) {
+export default function LayerRenderer({ layer: rawLayer, palette }) {
+  /* Resolve any animated/modulated props to concrete values for this frame.
+   * Static layers (the whole editor today) skip the subscription entirely —
+   * `useTransportCtx(false)` never re-renders — so there's zero cost until a
+   * prop is bound. Hook is called unconditionally (rules of hooks); the flag
+   * just gates whether it subscribes. */
+  const animated = hasBindings(rawLayer)
+  const ctx = useTransportCtx(animated)
+  const layer = animated ? resolveLayer(rawLayer, ctx) : rawLayer
+
   if (!layer.visible) return null
 
   /* rotation (deg, clockwise) + flipX/flipY compose about the layer's own
@@ -46,8 +58,48 @@ export default function LayerRenderer({ layer, palette }) {
     case 'path':       return <PathLayer       layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'text':       return <TextLayer       layer={layer} palette={palette} layerStyle={layerStyle} />
     case 'group':      return <GroupLayer      layer={layer} palette={palette} layerStyle={layerStyle} />
+    case 'loop':       return <LoopLayer       layer={layer}                    layerStyle={layerStyle} />
     default:           return null
   }
+}
+
+/* Loop layer — an imported generative loop (src/loops) drawn to a positioned
+ * <canvas>. Time-driven by design, so it always subscribes to the transport:
+ * play advances `u`, seek/pause snap to a frame, param edits redraw via the
+ * normal re-render. Draw runs after every render (sub-ms canvas2d fills at
+ * layer size).
+ * ponytail: canvas backing = layer px × dpr (≤2) — soft under deep zoom-in;
+ * scale by CanvasZoomContext if it ever reads blurry. */
+function LoopLayer({ layer, layerStyle }) {
+  const canvasRef = useRef(null)
+  const tctx = useTransportCtx(true)
+  useEffect(() => {
+    const cv = canvasRef.current
+    const loop = loopById(layer.loopId)
+    if (!cv || !loop) return
+    const w = Math.max(1, layer.w ?? 1)
+    const h = Math.max(1, layer.h ?? 1)
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    const bw = Math.round(w * dpr)
+    const bh = Math.round(h * dpr)
+    if (cv.width !== bw) cv.width = bw
+    if (cv.height !== bh) cv.height = bh
+    const g = cv.getContext('2d')
+    g.setTransform(dpr, 0, 0, dpr, 0, 0)
+    loop.draw(g, tctx.t, w, h, layer)
+  })
+  return (
+    <canvas
+      ref={canvasRef}
+      data-layer-id={layer.id}
+      style={{
+        position: 'absolute',
+        left: layer.x, top: layer.y, width: layer.w, height: layer.h,
+        cursor: 'move',
+        ...layerStyle,
+      }}
+    />
+  )
 }
 
 /* Group layer — translates a positioned container; children render at

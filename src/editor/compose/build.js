@@ -24,6 +24,8 @@ import { buildPatternSvg } from '../modes/pattern/render'
 import { getShapeSvg }     from '../modes/pattern/shapes'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
+import { loopById } from '../../loops/registry'
+import { transport } from '../params/transport'
 
 const LOGO_RAW = {
   logomark:      logomarkRaw,
@@ -66,7 +68,7 @@ function wrap(layer, body) {
    * renderer's `rotate() scale()` (center origin, mirror-then-rotate).
    * Transform props are only ever set on layers with numeric bounds. */
   let xformAttr = ''
-  const rot = layer.rotation ?? 0
+  const rot = typeof layer.rotation === 'number' ? layer.rotation : 0  /* animated rotation exports at base */
   if ((rot || layer.flipX || layer.flipY) && layer.x != null && layer.w != null) {
     const cx = layer.x + layer.w / 2
     const cy = layer.y + layer.h / 2
@@ -280,6 +282,25 @@ function textLayerSvg(layer, palette) {
 </foreignObject>`
 }
 
+/* Loop layer — rasterize the loop's CURRENT frame (transport t) to a data
+ * URL and embed as <image>, mirroring the photo path. Vector export of a
+ * canvas2d draw fn isn't possible; a 2× raster snapshot matches what the
+ * user sees. */
+function loopLayerSvg(layer) {
+  const loop = loopById(layer.loopId)
+  if (!loop || typeof document === 'undefined') return ''
+  const lw = Math.max(1, layer.w ?? 0)
+  const lh = Math.max(1, layer.h ?? 0)
+  const scale = 2
+  const c = document.createElement('canvas')
+  c.width = Math.round(lw * scale)
+  c.height = Math.round(lh * scale)
+  const g = c.getContext('2d')
+  g.scale(scale, scale)
+  loop.draw(g, transport.getT(), lw, lh, layer)
+  return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${(layer.x ?? 0).toFixed(2)}" y="${(layer.y ?? 0).toFixed(2)}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
+}
+
 /* Recursive group export: a `<g transform="translate(gx gy)">` containing
  * each child's wrapped body. Children's own x/y/w/h are group-relative;
  * the translate restores canvas-absolute positioning. */
@@ -312,26 +333,36 @@ function layerToSvg(layer, palette, w, h, idx, defs) {
     case 'path':       body = pathLayerSvg(layer, palette); break
     case 'text':       body = textLayerSvg(layer, palette); break
     case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs); break
+    case 'loop':       body = loopLayerSvg(layer); break
     default: break
   }
   if (!body) return ''
   return wrap(layer, body)
 }
 
-export function buildLayersSvg({ layers, palette, aspect = '1:1', customRatio = null }) {
-  const { w, h } = aspectToWH(aspect, customRatio)
+export function buildLayersSvg({ layers, palette, aspect = '1:1', customRatio = null, canvasW = null, canvasH = null }) {
+  /* Virtual coordinate space (what layers are positioned in) stays at the
+   * 1080-wide baseline; the SVG's width/height carry the real output pixels.
+   * viewBox = virtual, so a 1920×1080 export just scales the same geometry —
+   * no per-layer coordinate change. Falls back to aspect when no explicit
+   * dimensions are passed (legacy callers). */
+  const useDims = canvasW > 0 && canvasH > 0
+  const vw = CANVAS_W
+  const vh = useDims ? Math.round(CANVAS_W * (canvasH / canvasW)) : aspectToWH(aspect, customRatio).h
+  const outW = useDims ? canvasW : vw
+  const outH = useDims ? canvasH : vh
 
   const defs = []
   const bodies = []
 
   layers.forEach((layer, idx) => {
-    const body = layerToSvg(layer, palette, w, h, idx, defs)
+    const body = layerToSvg(layer, palette, vw, vh, idx, defs)
     if (body) bodies.push(body)
   })
 
   const defsBlock = defs.length ? `<defs>${defs.join('')}</defs>` : ''
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${outW}" height="${outH}" viewBox="0 0 ${vw} ${vh}">
 ${defsBlock}
 ${bodies.join('\n')}
 </svg>`
