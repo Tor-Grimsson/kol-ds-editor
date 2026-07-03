@@ -12,9 +12,12 @@ import { useTypeState } from '../modes/type/state'
 import { getFeatures } from '../registry/features'
 import { useComposeFile } from '../compose/useComposeFile'
 import { findLayerDeep } from '../compose/helpers'
+import { isBooleanable } from '../compose/boolean-ops'
 import { FILTERS } from '../../filters'
 import { schemaDefaults } from '../params/schema'
-import { loopById } from '../../loops/registry'
+import { loopById, groupById, presetsInGroup, presetsInSub, presetParams } from '../../loops/registry'
+import { GENERATIVE_TREE, TYPE_LAB_TREE } from '../../loops/taxonomy'
+import { effectCategories } from '../compose/inspectors/effectCategories'
 
 /**
  * MenuTop — top bar above the editor grid.
@@ -39,7 +42,8 @@ export default function MenuTop() {
   const {
     aspect, setAspect,
     view, setView,
-    layers, selectedId, updateLayer,
+    layers, selectedId, selectedIds, updateLayer, addLayer,
+    flattenSelected, releaseBoolean,
     canUndo, canRedo, undo, redo,
     clearLayers,
     currentPresetId, currentPresetName, setCurrentPresetName,
@@ -84,6 +88,60 @@ export default function MenuTop() {
   const clearEffect = () => {
     if (fxTarget) updateLayer(fxTarget.id, { filterId: null })
   }
+
+  /* Generative menu — the app hierarchy (METHOD > TYPE > CATEGORY > PRESET,
+   * docs/documentation/01-hierarchy.md) over the loop registry. Picking a
+   * preset inserts a loop layer carrying it (same update shape as the
+   * inspector's applyPreset). */
+  const addGenerative = (preset, groupId) => {
+    addLayer('loop', {
+      loopGroup:   groupId,
+      presetId:    preset.id,
+      presetLabel: preset.label,
+      loopId:      preset.loop,
+      ...presetParams(preset),
+    })
+    if (currentMode !== 'compose') navigate('/editor/compose')
+  }
+  /* Presets of one registry group, in file order with sub-bucket headers. */
+  const generativeItems = (groupId) => {
+    const out = []
+    let lastSub = null
+    for (const p of presetsInGroup(groupId)) {
+      if (p.sub && p.sub !== lastSub) {
+        lastSub = p.sub
+        out.push(
+          <div key={`sub-${p.sub}`} className="kol-helper-10 text-subtle px-3 pt-2 pb-1">
+            {p.sub}
+          </div>,
+        )
+      }
+      out.push(
+        <MenuDropdownItem key={p.id} onClick={() => addGenerative(p, groupId)}>
+          {p.label}
+        </MenuDropdownItem>,
+      )
+    }
+    return out
+  }
+  /* Vector menu — Flatten shape (Figma ⌘E semantics): one selected bool
+   * group bakes to its path; ≥2 eligible vector layers destructive-unite. */
+  const vectorSel = (selectedIds ?? []).filter((id) => id !== 'canvas')
+    .map((id) => findLayerDeep(layers, id)).filter(Boolean)
+  const canFlatten =
+    (vectorSel.length === 1 && vectorSel[0].type === 'bool') ||
+    (vectorSel.length >= 2 && vectorSel.every(isBooleanable))
+  /* Release = un-boolean (top-level bools, ungroup scope). */
+  const canRelease = layers.some((l) => l.id === selectedId && l.type === 'bool')
+
+  /* EFFECTS > Pattern — the four labs /optic/* generator pages. They insert
+   * loop layers (nothing to filter), so they render without an fx target. */
+  const FX_PATTERN_CATEGORIES = [
+    { label: 'Moiré',         group: 'optic',     sub: 'Moiré' },
+    { label: 'Mesh Gradient', group: 'gradients', sub: 'Mesh' },
+    { label: 'Reaction',      group: 'optic',     sub: 'Reaction' },
+    { label: 'Halftone',      group: 'optic',     sub: 'Halftone' },
+  ]
 
   const confirmReplaceIfUnsaved = async () => {
     if (layers.length === 0) return true
@@ -141,27 +199,93 @@ export default function MenuTop() {
             chrome (panel={false}) and get NO z-index — the canvas rulers
             (z-index 4, positioned) would paint over them. Match the
             .kol-popover token value. */}
+        <MenuItem label="Generative" panelClassName="z-[1000]" panelStyle={{ maxHeight: '70vh', overflowY: 'auto' }}>
+          <div className="py-1 w-[260px]">
+            {GENERATIVE_TREE.map((parent) => (
+              <MenuDropdownNest key={parent.label} label={parent.label}>
+                {parent.groups.length === 1
+                  ? generativeItems(parent.groups[0])
+                  : parent.groups.map((gid) => (
+                      <MenuDropdownNest key={gid} label={parent.labels?.[gid] ?? groupById(gid).label}>
+                        {generativeItems(gid)}
+                      </MenuDropdownNest>
+                    ))}
+              </MenuDropdownNest>
+            ))}
+            {/* Labs Type Lab section — parked here, not a Generative type. */}
+            <MenuDropdownDivider />
+            <div className="kol-helper-10 text-subtle px-3 pt-2 pb-1">Type Lab</div>
+            {TYPE_LAB_TREE.map((parent) => (
+              <MenuDropdownNest key={parent.label} label={parent.label}>
+                {generativeItems(parent.groups[0])}
+              </MenuDropdownNest>
+            ))}
+          </div>
+        </MenuItem>
+
         <MenuItem label="Effects" panelClassName="z-[1000]" panelStyle={{ maxHeight: '70vh', overflowY: 'auto' }}>
-          <div className="py-1 w-[220px]">
+          <div className="py-1 w-[260px]">
+            {/* TYPE nests (Halftone · Scanline · CRT · Refraction · FX rack ·
+                Pattern); categories inside apply a filter to the selected
+                layer. Preset picking lives in the Effects panel. */}
             {!fxTarget ? (
-              <div className="kol-helper-10 text-subtle px-3 py-1">Select a layer first</div>
+              <div className="kol-helper-10 text-subtle px-3 py-1">Select a layer to apply an effect</div>
             ) : (
               <>
                 <MenuDropdownItem onClick={clearEffect} disabled={!fxTarget.filterId}>
                   None
                 </MenuDropdownItem>
                 <MenuDropdownDivider />
-                {fxOptions.map((f) => (
-                  <MenuDropdownItem
-                    key={f.id}
-                    onClick={() => applyEffect(f)}
-                    shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
-                  >
-                    {f.label}
-                  </MenuDropdownItem>
+                {effectCategories(fxOptions).filter((c) => c.id !== 'other' && c.id !== 'pattern').map((c) => (
+                  <MenuDropdownNest key={c.id} label={c.label}>
+                    {c.filters.map((f) => (
+                      <MenuDropdownItem
+                        key={f.id}
+                        onClick={() => applyEffect(f)}
+                        shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
+                      >
+                        {f.label}
+                      </MenuDropdownItem>
+                    ))}
+                  </MenuDropdownNest>
                 ))}
               </>
             )}
+            {/* Pattern (labs EFFECTS > Pattern) — one nest holding both its
+                filters (need an fx target) and the four generator categories
+                (insert a layer, no target needed). */}
+            <MenuDropdownDivider />
+            <MenuDropdownNest label="Pattern">
+              {fxTarget && effectCategories(fxOptions).find((c) => c.id === 'pattern')?.filters.map((f) => (
+                <MenuDropdownItem
+                  key={f.id}
+                  onClick={() => applyEffect(f)}
+                  shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
+                >
+                  {f.label}
+                </MenuDropdownItem>
+              ))}
+              {FX_PATTERN_CATEGORIES.map((c) => (
+                <MenuDropdownNest key={c.label} label={c.label}>
+                  {presetsInSub(c.group, c.sub).map((p) => (
+                    <MenuDropdownItem key={p.id} onClick={() => addGenerative(p, c.group)}>
+                      {p.label}
+                    </MenuDropdownItem>
+                  ))}
+                </MenuDropdownNest>
+              ))}
+            </MenuDropdownNest>
+          </div>
+        </MenuItem>
+
+        <MenuItem label="Vector" panelClassName="z-[1000]">
+          <div className="py-1 w-[220px]">
+            <MenuDropdownItem onClick={flattenSelected} disabled={!canFlatten}>
+              Flatten shape
+            </MenuDropdownItem>
+            <MenuDropdownItem onClick={() => releaseBoolean()} disabled={!canRelease}>
+              Release boolean
+            </MenuDropdownItem>
           </div>
         </MenuItem>
 

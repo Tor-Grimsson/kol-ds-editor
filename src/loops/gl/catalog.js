@@ -17,7 +17,7 @@ import { SCENES } from './softformsRegistry.js'
 import { SCENES_3D } from './softforms3dRegistry.js'
 import { PRIMITIVES, PRESETS as POSE_PRESETS } from './primitivePresets.js'
 import { ARRANGEMENTS } from './primitiveComposition.js'
-import { GRAD_PALETTES, BACKDROPS } from './gradEnums.js'
+import { GRAD_PALETTES, BACKDROPS, GRAD_LOOKS } from './gradEnums.js'
 import { FORMS } from './formsShapes.js'
 import { ENVIRONMENTS } from './envScenes.js'
 import { SHAPES as MESH_SHAPES, DRIVERS as MESH_DRIVERS, BG_STYLES as MESH_BG_STYLES, PALETTES as MESH_PALETTES } from './meshPalettes.js'
@@ -44,6 +44,7 @@ const CAM_ANIM = { tab: 'anim', section: 'Camera' }
 
 const GRAD_PALETTE_OPTS = opts(GRAD_PALETTES)
 const BACKDROP_OPTS     = opts(BACKDROPS)
+const GRAD_LOOK_OPTS    = opts(GRAD_LOOKS)
 
 /* ── Drift — one loop per family (family picks the fragment shader) ──── */
 const DRIFT_STYLES = {
@@ -110,20 +111,24 @@ const DRIFT_PRESETS = Object.entries(SUBPAGES).flatMap(([family, pages]) =>
  * the preset-set cat/type the same way scene3d gates on count. */
 const iCat = (l) => Math.round(l.cat ?? 2)
 const iType = (l) => Math.round(l.type ?? 0)
+/* Manual colour knobs act only while look === 'custom' — a named look is a
+ * GRAD_LOOKS recipe the engine overlays on every setParams. */
+const iCustom = (l) => (l.look ?? 'custom') === 'custom'
 const IRIDESCENT_LOOP = {
   id: 'iridescent', label: 'Iridescent', group: 'gradients', kind: 'engine', engine: 'iridescent',
   drive: 'dt', duration: 8,
   params: [
+    { key: 'look', label: 'Look', type: 'select', default: 'custom', options: GRAD_LOOK_OPTS, section: 'Color' },
     /* uSpectral defaults ON in the engine — the palette ramp only shows once
      * it's switched off (tint() = mix(ramp, rainbow, uSpectral)). */
-    { key: 'spectral', label: 'Spectral', type: 'toggle', default: true, section: 'Color' },
-    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS, section: 'Color', when: (l) => !(l.spectral ?? true) },
-    { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS, section: 'Color', when: (l) => iCat(l) === 2 },
+    { key: 'spectral', label: 'Spectral', type: 'toggle', default: true, section: 'Color', when: iCustom },
+    { key: 'palette', label: 'Palette', type: 'select', default: 'spectrum', options: GRAD_PALETTE_OPTS, section: 'Color', when: (l) => iCustom(l) && !(l.spectral ?? true) },
+    { key: 'backdrop', label: 'Backdrop', type: 'select', default: 'black', options: BACKDROP_OPTS, section: 'Color', when: (l) => iCat(l) === 2 && (l.look ?? 'custom') !== 'noir' },
     { ...range('count', 'Count', 1, 6, 1, 5, { section: 'Composition' }), when: (l) => (iCat(l) === 2 && iType(l) === 0) || (iCat(l) === 1 && iType(l) === 1) },
     { ...range('size', 'Size', 0.1, 2, 0.05, 1, { section: 'Composition' }), when: (l) => iCat(l) === 2 && (iType(l) === 0 || iType(l) === 2) },
     { ...range('spread', 'Spread', 0, 2, 0.05, 1, { section: 'Composition' }), when: (l) => (iCat(l) === 1 && iType(l) <= 1) || (iCat(l) === 2 && iType(l) === 0) },
-    { ...range('irid', 'Iridescence', 0, 2, 0.05, 1, { section: 'Look' }), when: (l) => !(iCat(l) === 1 && (iType(l) === 1 || iType(l) === 2)) },
-    range('hue', 'Hue shift', 0, 1, 0.01, 0, { section: 'Look' }),
+    { ...range('irid', 'Iridescence', 0, 2, 0.05, 1, { section: 'Look' }), when: (l) => iCustom(l) && !(iCat(l) === 1 && (iType(l) === 1 || iType(l) === 2)) },
+    { ...range('hue', 'Hue shift', 0, 1, 0.01, 0, { section: 'Look' }), when: iCustom },
     { ...range('sheen', 'Sheen', 0, 1.5, 0.05, 0.5, { section: 'Look' }), when: (l) => iCat(l) === 2 || (iCat(l) === 1 && iType(l) <= 1) },
     /* gloss is a specular pow() exponent (labs CTRL_SPEC 4–90), not a 0–1 amount */
     { ...range('gloss', 'Gloss', 4, 90, 1, 24, { section: 'Look' }), when: (l) => iCat(l) === 2 },
@@ -135,14 +140,21 @@ const IRIDESCENT_LOOP = {
 /* cat 0=field / 1=pole / 2=volume; type indexes the shader branch. */
 const IP = (id, label, cat, type, extra = {}) =>
   ({ id: `irid-${id}`, label, loop: 'iridescent', params: { cat, type, ...extra } })
+/* Extras on the labs-ported presets pin that type's labs registry defaults
+ * where they differ from the engine's (blobs-centric) uniform defaults. */
 const IRIDESCENT_PRESETS = [
   IP('field', 'Silk field', 0, 0),
   IP('banded', 'Banded', 0, 1, { freq: 1.4 }),
   IP('radial', 'Radial bloom', 0, 2),
+  IP('conic', 'Conic sweep', 0, 3, { irid: 1, warp: 0, spin: 0.3 }),
   IP('monopole', 'Monopole', 1, 0),
   IP('multipole', 'Multipole', 1, 1, { count: 6 }),
+  IP('mesh', 'Mesh blend', 1, 2, { spectral: false, palette: 'candy', warp: 0.18 }),
+  IP('aurora', 'Aurora', 1, 3, { irid: 1, hue: 0.5, spectral: false, palette: 'aqua', warp: 0 }),
   IP('blob', 'Blob', 2, 0),
   IP('spiral', 'Spiral', 2, 1),
+  IP('dome', 'Dome', 2, 2, { size: 0.6, irid: 1.1, hue: 0.3, sheen: 0.6, gloss: 30, relief: 1, warp: 0.08 }),
+  IP('ripple', 'Ripple', 2, 3, { irid: 1, hue: 0.55, spectral: false, palette: 'aqua', freq: 3, relief: 1, gloss: 20, warp: 0.05, backdrop: 'abyss' }),
 ]
 
 /* ── Soft forms 2D / 3D — scenes carry `forms` arrays as opaque params ── */
@@ -318,13 +330,15 @@ const RIBBON_LOOP = {
   params: [
     /* geometry (rebuilds the swept ribbon) */
     ...tag({ section: 'Geometry' }, [
-      range('seed', 'Seed', 1, 40, 1, 1),
+      range('seed', 'Seed', 1, 64, 1, 1),
       range('loops', 'Loops', 1, 6, 1, 3),
       range('height', 'Height', 0.5, 4, 0.1, 2.2),
       range('gap', 'Gap', 0.3, 1.6, 0.02, 0.92),
       range('depth', 'Depth', 0, 1, 0.02, 0.35),
       range('curl', 'Curl', 0, 3, 0.05, 1),
       range('width', 'Width', 0.1, 1.2, 0.02, 0.5),
+      range('ribbonThickness', 'Flatness', 0.04, 0.3, 0.005, 0.12),
+      range('corner', 'Corner', 0.01, 0.12, 0.005, 0.045),
     ]),
     /* look — applyMaterialProps splits per material: metalness is chrome-only,
      * ior/dispersion are glass-only. */
@@ -357,6 +371,17 @@ const RIBBON_PRESETS = [
   RP('chrome', 'Chrome', { materialType: 'chrome', ribbonColor: '#dfe4ea', roughness: 0.12 }),
   RP('ember', 'Ember', { ribbonColor: '#ffb36b', background: '#120802', bloom: 0.9, dispersion: 14 }),
   RP('coil', 'Coil', { seed: 7, loops: 5, curl: 1.8, width: 0.32, gap: 0.7 }),
+  /* Labs ribbon presets (geometry recipes) — unset keys ride the schema
+   * defaults, which equal the labs 'cascade' baseline apart from seed. */
+  RP('cascade', 'Cascade', { seed: 3 }),
+  RP('tower', 'Tower', { seed: 17, loops: 4, height: 2.9, gap: 0.7, depth: 0.26, curl: 0.5, width: 0.44, ribbonThickness: 0.11, corner: 0.04, materialType: 'chrome' }),
+  RP('plunge', 'Plunge', { seed: 23, loops: 1, height: 2.5, gap: 1, depth: 0.62, curl: 1.9, width: 0.55, ribbonThickness: 0.13, corner: 0.05 }),
+  RP('braid', 'Braid', { seed: 41, loops: 2, height: 1.9, gap: 0.88, depth: 0.72, curl: 0.8, width: 0.64, ribbonThickness: 0.14, corner: 0.055, materialType: 'chrome' }),
+  RP('fan', 'Fan', { seed: 7, loops: 5, height: 1.5, gap: 0.66, depth: 0.2, curl: 0.35, width: 0.46, ribbonThickness: 0.1, corner: 0.036 }),
+  RP('arch', 'Arch', { seed: 61, loops: 2, height: 3.1, gap: 1.12, depth: 0.48, curl: 1.1, width: 0.48, ribbonThickness: 0.115, corner: 0.042, materialType: 'chrome' }),
+  RP('wave', 'Wave', { seed: 13, loops: 4, height: 1.8, gap: 0.78, depth: 0.8, curl: 0.9 }),
+  RP('knot', 'Knot', { seed: 37, loops: 3, height: 2, gap: 0.62, depth: 0.3, curl: 1.7, width: 0.42, ribbonThickness: 0.1, corner: 0.036 }),
+  RP('slab', 'Slab', { seed: 29, loops: 2, height: 2.5, gap: 1.02, depth: 0.28, curl: 0.5, width: 0.86, ribbonThickness: 0.065, corner: 0.022, materialType: 'chrome' }),
 ]
 
 /* ── exports the main registry merges ────────────────────────────────── */

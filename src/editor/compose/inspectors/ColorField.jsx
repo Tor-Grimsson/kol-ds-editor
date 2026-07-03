@@ -51,13 +51,16 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
             hoverable={false}
           />
         </button>
+        {/* None shows an empty field ('# –' via placeholder), not the resolved
+            fallback hex — a disabled fill claiming #FFFFFF reads as white. */}
         <Input
           variant="ghost"
           size="sm"
           prefix="#"
           chars={6}
           uppercase
-          value={resolved.replace(/^#/, '').toUpperCase()}
+          placeholder="–"
+          value={isNone ? '' : resolved.replace(/^#/, '').toUpperCase()}
           onChange={(e) => onChange('#' + e.target.value.replace(/^#/, '').toUpperCase())}
         />
       </div>

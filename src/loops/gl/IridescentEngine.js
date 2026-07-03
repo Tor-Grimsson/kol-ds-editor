@@ -11,7 +11,7 @@ import * as THREE from 'three'
 
 // 5-stop palettes for the "Ramp" colour mode ("Spectral" sweeps a cosine rainbow).
 export { GRAD_PALETTES, BACKDROPS } from './gradEnums.js'
-import { GRAD_PALETTES, BACKDROPS } from './gradEnums.js'
+import { GRAD_PALETTES, BACKDROPS, GRAD_LOOKS } from './gradEnums.js'
 
 const VERT = `
   varying vec2 vUv;
@@ -265,6 +265,10 @@ export class IridescentEngine {
 
   setParams(p) {
     if (!this.uniforms) return
+    /* A named look (GRAD_LOOKS recipe) overrides the manual colour keys on
+     * every apply — the catalog hides those knobs unless look === 'custom'. */
+    const lk = p.look ? GRAD_LOOKS.find((x) => x.value === p.look) : null
+    if (lk?.p) p = { ...p, ...lk.p }
     const u = this.uniforms
     if (p.cat != null) u.uCat.value = Math.round(p.cat)
     if (p.type != null) u.uType.value = Math.round(p.type)

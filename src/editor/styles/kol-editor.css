@@ -200,10 +200,14 @@
   padding: 0;
 }
 .kol-compose-layer-collapse:hover { color: var(--kol-surface-on-primary); }
-/* Indent nested rows so the parent-child hierarchy reads visually — one
-   icon slot (18px icon + 8px gap), so a child's type icon aligns under
-   its parent's name. */
-.kol-compose-layer-nest { padding-left: 26px; }
+/* Chevrons are focus chrome, not resting chrome (Figma model): hidden until
+   the pointer is inside the stack, then every container row shows its own. */
+.kol-compose-layer-collapse { opacity: 0; transition: opacity 120ms; }
+[data-layer-stack]:hover .kol-compose-layer-collapse { opacity: 1; }
+/* Indent nested rows one chevron slot per level (Figma model) — a child's
+   type icon aligns under its parent's icon, not its name. Top-level rows
+   carry no nest class and sit flush. */
+.kol-compose-layer-nest { padding-left: 16px; }
 
 .kol-compose-layer-row {
   display: flex;
@@ -221,9 +225,14 @@
   background: var(--kol-fg-04);
   color: var(--kol-surface-on-primary);
 }
+/* Selected = accent highlight; a selected container also tints its expanded
+   children block one shade lighter (Figma model). Hover stays grey. */
 .kol-compose-layer-row.is-active {
-  background: var(--kol-surface-secondary);
+  background: color-mix(in srgb, var(--kol-accent-primary) 26%, transparent);
   color: var(--kol-fg-emphasis);
+}
+.kol-compose-layer-row.is-tinted {
+  background: color-mix(in srgb, var(--kol-accent-primary) 11%, transparent);
 }
 /* Hidden layer — dim the icon+name only; the slashed eye stays legible. */
 .kol-compose-layer-row.is-hidden .kol-compose-layer-main { opacity: 0.4; }

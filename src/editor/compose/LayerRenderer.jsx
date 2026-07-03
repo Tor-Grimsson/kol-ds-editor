@@ -6,6 +6,7 @@ import { getShapeSvg } from '../modes/pattern/shapes'
 import { resolveColor, COVER_TYPES, useComposeState } from './state'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
+import { computeBooleanCached } from './boolean-ops'
 import { hasBindings, resolveLayer } from '../params/resolve'
 import { useTransportCtx, transport } from '../params/transport'
 import { loopById, loopDrawParams } from '../../loops/registry'
@@ -74,6 +75,7 @@ export default function LayerRenderer({ layer: rawLayer, palette }) {
     }
     case 'shape':
     case 'path':
+    case 'bool':
     case 'text': {
       /* Universal effects (Phase 7): any positioned vector layer with a
        * canvas filter renders through EffectedLayer (its own SVG raster is
@@ -82,6 +84,7 @@ export default function LayerRenderer({ layer: rawLayer, palette }) {
       if (fx) return <EffectedLayer layer={layer} filter={fx} palette={palette} layerStyle={layerStyle} />
       if (layer.type === 'shape') return <ShapeLayer layer={layer} palette={palette} layerStyle={layerStyle} />
       if (layer.type === 'path')  return <PathLayer  layer={layer} palette={palette} layerStyle={layerStyle} />
+      if (layer.type === 'bool')  return <BoolLayer  layer={layer} palette={palette} layerStyle={layerStyle} />
       return <TextLayer layer={layer} palette={palette} layerStyle={layerStyle} />
     }
     case 'group':      return <GroupLayer      layer={layer} palette={palette} layerStyle={layerStyle} />
@@ -1017,6 +1020,24 @@ function PathLayer({ layer, palette, layerStyle }) {
         strokeLinejoin={layer.strokeLinejoin ?? 'round'}
       />
     </svg>
+  )
+}
+
+/* Bool layer — a non-destructive boolean group: the paper.js pipeline runs
+ * over `children` (bool-local coords, z-order bottom first) and the result
+ * draws exactly like a path layer (holes evenodd, painted-geometry hit-
+ * testing). Children never render individually. computeBooleanCached keys
+ * on the children array identity, so static frames pay nothing — a child
+ * edit swaps the array and recomputes. */
+function BoolLayer({ layer, palette, layerStyle }) {
+  const result = computeBooleanCached(layer)
+  if (!result) return null
+  return (
+    <PathLayer
+      layer={{ ...layer, nodes: result.nodes, holes: result.holes, closed: true }}
+      palette={palette}
+      layerStyle={layerStyle}
+    />
   )
 }
 

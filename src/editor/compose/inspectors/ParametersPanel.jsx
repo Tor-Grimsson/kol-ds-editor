@@ -21,7 +21,8 @@ import { SHAPE_SCHEMA } from '../../params/schemas/shape'
 import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
 import { TEXT_SCHEMA } from '../../params/schemas/text'
 import { PHOTO_SCHEMA } from '../../params/schemas/photo'
-import { GROUPS, loopById, loopBgToggleable, presetsInGroup, presetParams } from '../../../loops/registry'
+import { loopById, loopBgToggleable } from '../../../loops/registry'
+import { LoopPicker } from './LoopPicker'
 import { themeParams } from '../../../loops/theme'
 import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
 import { KINETIC_PRESETS, kineticPresetById, presetComp } from '../../../kinetic/presets'
@@ -140,26 +141,6 @@ function LayerParameters({ layer }) {
  */
 function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, tabStrip }) {
   const loop = loopById(layer.loopId)
-  const group = layer.loopGroup ?? 'shape'
-  const presets = presetsInGroup(group)
-  const groupOptions = GROUPS.map((g) => ({ value: g.id, label: g.label }))
-  /* Flat dropdown; `sub` buckets read as a label prefix (Dropdown has no
-   * option groups — revisit if it grows them). */
-  const presetOptions = presets.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))
-
-  /* Picking a preset resets the loop's params to the preset's full set
-   * (labs semantic — a preset is a curated starting point, not a patch). */
-  const applyPreset = (preset, g = group) => {
-    if (!preset) return
-    updateLayer(layer.id, {
-      loopGroup:   g,
-      presetId:    preset.id,
-      presetLabel: preset.label,
-      loopId:      preset.loop,
-      ...presetParams(preset),
-    })
-  }
-  const onGroup = (g) => applyPreset(presetsInGroup(g)[0], g)
 
   /* Theme — recolour roled color params (bg/fg/accent) via the imported
    * loops theme module. Non-roled params and user edits survive. */
@@ -187,17 +168,7 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
 
   return (
     <>
-      <LabeledControl label="Category">
-        <Dropdown variant="subtle" size="sm" className="w-full" options={groupOptions} value={group} onChange={onGroup} />
-      </LabeledControl>
-      <LabeledControl label="Preset">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={presetOptions}
-          value={layer.presetId}
-          onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
-        />
-      </LabeledControl>
+      <LoopPicker layer={layer} />
 
       {tabStrip}
 

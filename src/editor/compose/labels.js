@@ -10,8 +10,16 @@ export const TYPE_LABELS = {
   shape:      'Shape',
   text:       'Text',
   group:      'Group',
+  bool:       'Boolean',
   loop:       'Loop',
   kinetic:    'Kinetic type',
+}
+
+export const BOOL_OP_LABELS = {
+  unite:     'Unite',
+  subtract:  'Subtract',
+  intersect: 'Intersect',
+  exclude:   'Exclude',
 }
 
 export const SHAPE_KIND_LABELS = {
@@ -31,6 +39,10 @@ export function labelForLayer(layer) {
     const kind = SHAPE_KIND_LABELS[layer.kind ?? 'logo'] ?? 'Shape'
     return `Shape · ${kind}`
   }
+  if (layer.type === 'bool') {
+    const op = BOOL_OP_LABELS[layer.op]
+    return op ? `Boolean · ${op}` : TYPE_LABELS.bool
+  }
   if (layer.type === 'loop' && layer.presetLabel) return `Loop · ${layer.presetLabel}`
   if (layer.type === 'kinetic' && layer.presetLabel) return `Kinetic · ${layer.presetLabel}`
   return TYPE_LABELS[layer.type] ?? layer.type
@@ -47,6 +59,7 @@ export function rowLabelForLayer(layer) {
   if (layer.type === 'shape') {
     return SHAPE_KIND_LABELS[layer.kind ?? 'logo'] ?? TYPE_LABELS.shape
   }
+  if (layer.type === 'bool') return BOOL_OP_LABELS[layer.op] ?? TYPE_LABELS.bool
   if (layer.type === 'loop') return layer.presetLabel || TYPE_LABELS.loop
   if (layer.type === 'kinetic') return layer.presetLabel || TYPE_LABELS.kinetic
   return TYPE_LABELS[layer.type] ?? layer.type

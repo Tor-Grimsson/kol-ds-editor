@@ -13,7 +13,7 @@ const CATEGORIES = [
   { id: 'crt',        label: 'CRT',        filterIds: ['gl-disco', 'gl-slitscan', 'gl-scan', 'gl-trails', 'fx-kaleido', 'fx-mirror'] },
   /* glass is a refracting sheet — Refraction, not Pattern. */
   { id: 'refraction', label: 'Refraction', filterIds: ['gl-lens', 'gl-distort', 'fx-chromatic', 'glass'] },
-  { id: 'fx-rack',    label: 'FX rack',    filterIds: ['fx-hsl', 'fx-brightness', 'fx-blur', 'fx-sharpen', 'fx-posterize', 'fx-solarize', 'fx-emboss', 'fx-noise', 'fx-edge', 'fx-threshold', 'fx-pixelate', 'fx-pixelsort'] },
+  { id: 'fx-rack',    label: 'FX rack',    filterIds: ['fx-hsl', 'fx-hsv', 'fx-brightness', 'fx-contrast', 'fx-rgb', 'fx-blur', 'fx-sharpen', 'fx-posterize', 'fx-solarize', 'fx-invert', 'fx-sepia', 'fx-grayscale', 'fx-enhance', 'fx-emboss', 'fx-noise', 'fx-edge', 'fx-threshold', 'fx-pixelate', 'fx-pixelsort'] },
   /* dither is reaction-diffusion — labs Pattern's 'Reaction' bucket. */
   { id: 'pattern',    label: 'Pattern',    filterIds: ['dither'] },
 ]
@@ -40,3 +40,18 @@ export function categoryOf(filterId) {
   if (!filterId) return null
   return CATEGORIES.find((c) => c.filterIds.includes(filterId))?.id ?? 'other'
 }
+
+/* The filter param that IS the filter's preset list (hierarchy level 4 —
+ * METHOD > TYPE > CATEGORY > PRESET, docs/documentation/01-hierarchy.md).
+ * Surfaced as the "Preset" dropdown in the Effects panel; filters without
+ * an entry have no preset level (purely parametric). */
+const PRESET_PARAM = {
+  'fx-halftone-dither': 'mode',
+  'fx-ascii':           'algorithm',
+  'fx-bitmap':          'palette',
+  glass:                'pattern',
+  scanline:             'look',
+  dither:               'palette',
+  'gl-lens':            'type',
+}
+export const presetParamOf = (filterId) => PRESET_PARAM[filterId] ?? null

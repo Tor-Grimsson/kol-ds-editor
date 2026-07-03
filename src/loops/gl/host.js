@@ -142,6 +142,9 @@ function applyEngineParams(def, engine, params) {
         geom: {
           seed: params.seed, loops: params.loops, height: params.height,
           gap: params.gap, depth: params.depth, curl: params.curl, width: params.width,
+          /* ?? — layers saved before these schema keys existed pass concrete
+           * values, keeping the engine's geometry dirty-check stable. */
+          ribbonThickness: params.ribbonThickness ?? 0.12, corner: params.corner ?? 0.045,
         },
         globals: {
           ...HOST_CLOCK, duration: 12,

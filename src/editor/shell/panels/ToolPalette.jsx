@@ -155,6 +155,75 @@ function ShapeDropdown({ tool, setTool }) {
   )
 }
 
+/* Boolean dropdown — the four boolean ops in one slot (same fold pattern
+ * as ShapeDropdown, but one-shot actions, not a mode-arming tool): the
+ * trigger fires the last-picked op; the fold picks + fires another. */
+const BOOL_VARIANTS = [
+  { id: 'unite',     icon: 'bool-unite',     label: 'Unite' },
+  { id: 'subtract',  icon: 'bool-subtract',  label: 'Subtract front' },
+  { id: 'intersect', icon: 'bool-intersect', label: 'Intersect' },
+  { id: 'exclude',   icon: 'bool-exclude',   label: 'Exclude' },
+]
+
+function BooleanDropdown({ disabled, onApply }) {
+  const [open, setOpen] = useState(false)
+  const [lastPicked, setLastPicked] = useState('unite')
+  const popover = usePopover({
+    open,
+    onOpenChange: setOpen,
+    placement: 'bottom-start',
+    offset: 4,
+    role: 'menu',
+  })
+  const triggerVariant = BOOL_VARIANTS.find((v) => v.id === lastPicked) ?? BOOL_VARIANTS[0]
+
+  return (
+    <>
+      <button
+        ref={popover.refs.setReference}
+        {...popover.getReferenceProps({
+          onClick: (e) => {
+            onApply(triggerVariant.id)
+            e.currentTarget.blur()
+          },
+        })}
+        aria-label={`Boolean: ${triggerVariant.label}`}
+        data-kol-tip={`Boolean: ${triggerVariant.label}`}
+        className={`relative inline-flex items-center justify-center rounded text-emphasis kol-btn-quiet ${disabled ? 'opacity-30 pointer-events-none' : ''}`}
+        style={{ width: BTN, height: BTN, padding: 7 }}
+      >
+        <EditorIcon name={triggerVariant.icon} size={ICON} />
+        <EditorIcon
+          name="tool-fold-indicator"
+          size={5}
+          className="absolute opacity-70"
+          style={{ right: 3, bottom: 3 }}
+        />
+      </button>
+      <PopoverPanel popover={popover} panel={false} focus={false} className="z-50 bg-surface-secondary border border-fg-08 rounded shadow-lg">
+        {BOOL_VARIANTS.map((v) => (
+          <button
+            key={v.id}
+            type="button"
+            onClick={(e) => {
+              onApply(v.id)
+              setLastPicked(v.id)
+              setOpen(false)
+              e.currentTarget.blur()
+            }}
+            className="w-full kol-helper-12 px-3 h-8 inline-flex items-center gap-2 text-body hover:text-emphasis text-left"
+          >
+            <span className="shrink-0 w-4 inline-flex items-center justify-center">
+              <EditorIcon name={v.icon} size={14} />
+            </span>
+            <span className="flex-1 truncate">{v.label}</span>
+          </button>
+        ))}
+      </PopoverPanel>
+    </>
+  )
+}
+
 export default function ToolPalette() {
   const { tool, setTool } = useTool()
   const {
@@ -221,10 +290,7 @@ export default function ToolPalette() {
 
       <Divider />
 
-      <ActionButton icon="bool-unite"     label="Unite"          disabled={!canBool} onClick={() => booleanSelected('unite')} />
-      <ActionButton icon="bool-subtract"  label="Subtract front" disabled={!canBool} onClick={() => booleanSelected('subtract')} />
-      <ActionButton icon="bool-intersect" label="Intersect"      disabled={!canBool} onClick={() => booleanSelected('intersect')} />
-      <ActionButton icon="bool-exclude"   label="Exclude"        disabled={!canBool} onClick={() => booleanSelected('exclude')} />
+      <BooleanDropdown disabled={!canBool} onApply={booleanSelected} />
 
       <Divider />
 

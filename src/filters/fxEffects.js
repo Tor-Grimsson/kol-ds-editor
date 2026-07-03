@@ -90,6 +90,71 @@ function fxBrightness(sd, od, w, h, q) {
   }
 }
 
+/* ── Contrast (ImageFilters.BrightnessContrastPhotoshop, brightness 0) ── */
+
+function fxContrast(sd, od, w, h, q) {
+  const c = ((q.contrast ?? 0) + 100) / 100
+  for (let i = 0; i < sd.length; i += 4) {
+    let v = ((sd[i] - 127.5) * c + 127.5 + 0.5) | 0
+    od[i] = v > 255 ? 255 : v < 0 ? 0 : v
+    v = ((sd[i + 1] - 127.5) * c + 127.5 + 0.5) | 0
+    od[i + 1] = v > 255 ? 255 : v < 0 ? 0 : v
+    v = ((sd[i + 2] - 127.5) * c + 127.5 + 0.5) | 0
+    od[i + 2] = v > 255 ? 255 : v < 0 ? 0 : v
+    od[i + 3] = sd[i + 3]
+  }
+}
+
+/* ── RGB (ImageFilters.ColorTransformFilter — per-channel offsets) ────── */
+
+function fxRgb(sd, od, w, h, q) {
+  const ro = q.red ?? 0, go = q.green ?? 0, bo = q.blue ?? 0
+  for (let i = 0; i < sd.length; i += 4) {
+    let v = sd[i] + ro
+    od[i] = v > 255 ? 255 : v < 0 ? 0 : v
+    v = sd[i + 1] + go
+    od[i + 1] = v > 255 ? 255 : v < 0 ? 0 : v
+    v = sd[i + 2] + bo
+    od[i + 2] = v > 255 ? 255 : v < 0 ? 0 : v
+    od[i + 3] = sd[i + 3]
+  }
+}
+
+/* ── Invert (ImageFilters.Invert) ─────────────────────────────────────── */
+
+function fxInvert(sd, od) {
+  for (let i = 0; i < sd.length; i += 4) {
+    od[i] = 255 - sd[i]
+    od[i + 1] = 255 - sd[i + 1]
+    od[i + 2] = 255 - sd[i + 2]
+    od[i + 3] = sd[i + 3]
+  }
+}
+
+/* ── Sepia (ImageFilters.Sepia — the classic tone matrix) ─────────────── */
+
+function fxSepia(sd, od) {
+  for (let i = 0; i < sd.length; i += 4) {
+    const r = sd[i], g = sd[i + 1], b = sd[i + 2]
+    let v = r * 0.393 + g * 0.769 + b * 0.189
+    od[i] = v > 255 ? 255 : (v + 0.5) | 0
+    v = r * 0.349 + g * 0.686 + b * 0.168
+    od[i + 1] = v > 255 ? 255 : (v + 0.5) | 0
+    v = r * 0.272 + g * 0.534 + b * 0.131
+    od[i + 2] = v > 255 ? 255 : (v + 0.5) | 0
+    od[i + 3] = sd[i + 3]
+  }
+}
+
+/* ── Grayscale (ImageFilters.GrayScale — Rec.601 fixed-point luma) ────── */
+
+function fxGrayscale(sd, od) {
+  for (let i = 0; i < sd.length; i += 4) {
+    od[i] = od[i + 1] = od[i + 2] = (sd[i] * 19595 + sd[i + 1] * 38470 + sd[i + 2] * 7471) >> 16
+    od[i + 3] = sd[i + 3]
+  }
+}
+
 /* ── Blur (ImageFilters.StackBlur — Mario Klingemann's stack blur) ────── */
 
 const MUL_TABLE = [
@@ -337,6 +402,41 @@ function fxEmboss(sd, od, w, h) {
   }
 }
 
+/* ── Enhance (ImageFilters.Enrich — 3×3 convolution, ÷10 −40 bias) ────── */
+
+const ENRICH_KERNEL = [0, -2, 0, -2, 20, -2, 0, -2, 0]
+
+function fxEnhance(sd, od, w, h) {
+  let index = 0
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++, index += 4) {
+      let r = 0, g = 0, b = 0, m = 0
+      for (let row = -1; row <= 1; row++) {
+        const rowIndex = y + row
+        // same centre-clamp edge fallback as fxEmboss (labs ConvolutionFilter)
+        const offset = (rowIndex >= 0 && rowIndex < h ? rowIndex : y) * w
+        for (let col = -1; col <= 1; col++) {
+          const k = ENRICH_KERNEL[m++]
+          if (k === 0) continue
+          let colIndex = x + col
+          if (colIndex < 0 || colIndex >= w) colIndex = x
+          const p = (offset + colIndex) << 2
+          r += k * sd[p]
+          g += k * sd[p + 1]
+          b += k * sd[p + 2]
+        }
+      }
+      r = r / 10 - 40
+      g = g / 10 - 40
+      b = b / 10 - 40
+      od[index] = r > 255 ? 255 : r < 0 ? 0 : r | 0
+      od[index + 1] = g > 255 ? 255 : g < 0 ? 0 : g | 0
+      od[index + 2] = b > 255 ? 255 : b < 0 ? 0 : b | 0
+      od[index + 3] = sd[index + 3]
+    }
+  }
+}
+
 /* ── Noise (canvasEffects.applyNoise, made deterministic + loopable) ──── */
 
 function hash2(x, y) {
@@ -379,6 +479,22 @@ export const EFFECTS_FX = [
     },
   },
   {
+    /* labs runs filter-hsv through the SAME HSLAdjustment pass as filter-hsl
+     * (canvasEffects.js applyOne fall-through) — the alias is kept faithfully. */
+    id: 'fx-hsv',
+    label: 'HSV',
+    animated: false,
+    params: [
+      { key: 'hue', label: 'Hue', type: 'range', min: -1, max: 1, step: 0.01, default: 0 },
+      { key: 'saturation', label: 'Saturation', type: 'range', min: -2, max: 10, step: 0.1, default: 0 },
+      { key: 'value', label: 'Value', type: 'range', min: -2, max: 2, step: 0.1, default: 0 },
+      AMOUNT_PARAM,
+    ],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxHsl, { hue: p.hue ?? 0, saturation: p.saturation ?? 0, value: p.value ?? 0 }, p.amount)
+    },
+  },
+  {
     id: 'fx-brightness',
     label: 'Brightness',
     animated: false,
@@ -388,6 +504,68 @@ export const EFFECTS_FX = [
     ],
     apply(ctx, src, w, h, p) {
       runFx(ctx, src, w, h, fxBrightness, { brightness: p.brightness ?? 0 }, p.amount)
+    },
+  },
+  {
+    id: 'fx-contrast',
+    label: 'Contrast',
+    animated: false,
+    params: [
+      { key: 'contrast', label: 'Contrast', type: 'range', min: -100, max: 100, step: 1, default: 0 },
+      AMOUNT_PARAM,
+    ],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxContrast, { contrast: p.contrast ?? 0 }, p.amount)
+    },
+  },
+  {
+    id: 'fx-rgb',
+    label: 'RGB',
+    animated: false,
+    params: [
+      { key: 'red', label: 'Red', type: 'range', min: -255, max: 255, step: 1, default: 0 },
+      { key: 'green', label: 'Green', type: 'range', min: -255, max: 255, step: 1, default: 0 },
+      { key: 'blue', label: 'Blue', type: 'range', min: -255, max: 255, step: 1, default: 0 },
+      AMOUNT_PARAM,
+    ],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxRgb, { red: p.red ?? 0, green: p.green ?? 0, blue: p.blue ?? 0 }, p.amount)
+    },
+  },
+  {
+    id: 'fx-invert',
+    label: 'Invert',
+    animated: false,
+    params: [AMOUNT_PARAM],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxInvert, null, p.amount)
+    },
+  },
+  {
+    id: 'fx-sepia',
+    label: 'Sepia',
+    animated: false,
+    params: [AMOUNT_PARAM],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxSepia, null, p.amount)
+    },
+  },
+  {
+    id: 'fx-grayscale',
+    label: 'Grayscale',
+    animated: false,
+    params: [AMOUNT_PARAM],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxGrayscale, null, p.amount)
+    },
+  },
+  {
+    id: 'fx-enhance',
+    label: 'Enhance',
+    animated: false,
+    params: [AMOUNT_PARAM],
+    apply(ctx, src, w, h, p) {
+      runFx(ctx, src, w, h, fxEnhance, null, p.amount)
     },
   },
   {

@@ -17,7 +17,8 @@ import { ColorField } from './ColorField'
 import BindDot from '../../params/BindDot'
 import { BLEND_MODES } from '../LayerStack'
 import { filterById } from '../../../filters'
-import { GROUPS, loopById, loopBgToggleable, presetsInGroup, presetParams } from '../../../loops/registry'
+import { loopById, loopBgToggleable } from '../../../loops/registry'
+import { LoopPicker } from './LoopPicker'
 
 /**
  * LayerInspector — HIGH-LEVEL surface for the selected layer (Phase 6-A):
@@ -103,7 +104,7 @@ export default function LayerInspector({ layer }) {
       {/* Loop pickers + backdrop — surfaced here per review (also in
         * Parameters); bg toggle hidden for loops whose bg feeds their
         * color math. */}
-      {layer.type === 'loop' && <LoopPickerRows layer={layer} />}
+      {layer.type === 'loop' && <LoopPicker layer={layer} />}
       {layer.type === 'loop' && loopBgToggleable(loopById(layer.loopId)) && (
         <LabeledControl label="Background">
           <ViewToggle
@@ -147,46 +148,6 @@ export default function LayerInspector({ layer }) {
         <GroupFields layer={layer} ungroupLayer={ungroupLayer} />
       )}
     </div>
-  )
-}
-
-/* Loop Category + Preset pickers, surfaced in the Inspector (review r3 —
- * the deep params stay in Parameters, but switching what plays shouldn't
- * need a tab flip). Same preset semantics as LoopFields: picking one
- * resets the loop's params to the preset's full set. */
-function LoopPickerRows({ layer }) {
-  const { updateLayer } = useComposeState()
-  const group = layer.loopGroup ?? 'shape'
-  const presets = presetsInGroup(group)
-  const applyPreset = (preset, g = group) => {
-    if (!preset) return
-    updateLayer(layer.id, {
-      loopGroup:   g,
-      presetId:    preset.id,
-      presetLabel: preset.label,
-      loopId:      preset.loop,
-      ...presetParams(preset),
-    })
-  }
-  return (
-    <>
-      <LabeledControl label="Category">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={GROUPS.map((g) => ({ value: g.id, label: g.label }))}
-          value={group}
-          onChange={(g) => applyPreset(presetsInGroup(g)[0], g)}
-        />
-      </LabeledControl>
-      <LabeledControl label="Preset">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={presets.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))}
-          value={layer.presetId}
-          onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
-        />
-      </LabeledControl>
-    </>
   )
 }
 

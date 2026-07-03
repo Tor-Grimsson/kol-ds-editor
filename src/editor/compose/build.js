@@ -24,6 +24,7 @@ import { buildPatternSvg } from '../modes/pattern/render'
 import { getShapeSvg }     from '../modes/pattern/shapes'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
+import { computeBooleanCached } from './boolean-ops'
 import { loopById, loopDrawParams } from '../../loops/registry'
 import { transport } from '../params/transport'
 import { kineticFontCss } from '../../kinetic/fonts'
@@ -292,6 +293,15 @@ function pathLayerSvg(layer, palette) {
   return `<path transform="translate(${(layer.x ?? 0).toFixed(2)} ${(layer.y ?? 0).toFixed(2)})" d="${d}" fill="${fill}"${fillRuleAttr}${strokeAttrs}/>`
 }
 
+/* Bool layer — the live boolean result over `children`, exported as the
+ * path layer it renders as (same geometry the canvas shows; cache shared
+ * with the DOM renderer). */
+function boolLayerSvg(layer, palette) {
+  const res = computeBooleanCached(layer)
+  if (!res) return ''
+  return pathLayerSvg({ ...layer, nodes: res.nodes, holes: res.holes, closed: true }, palette)
+}
+
 function textLayerSvg(layer, palette) {
   const color       = resolveColor(layer.color, palette) ?? '#FFFFFF'
   const strokeColor = resolveColor(layer.stroke, palette)
@@ -411,6 +421,7 @@ export function layerToSvg(layer, palette, w, h, idx, defs) {
     case 'photo':      body = photoLayerSvg(layer, w, h, idx, defs); break
     case 'shape':      body = shapeLayerSvg(layer, palette); break
     case 'path':       body = pathLayerSvg(layer, palette); break
+    case 'bool':       body = boolLayerSvg(layer, palette); break
     case 'text':       body = textLayerSvg(layer, palette); break
     case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs); break
     case 'loop':       body = loopLayerSvg(layer); break

@@ -42,13 +42,23 @@ function fbm(x, y) {
 const band = (i) => hash2(i, 7) * 2 - 1
 
 /* Each pattern: field(nx, ny, scale, t) -> [fx, fy] in roughly [-1,1].
- * nx,ny ∈ [0,1]; t is the woven animation clock — most are static at t=0. */
+ * nx,ny ∈ [0,1]; t is the woven animation clock — most are static at t=0.
+ * `dispersion` (labs preset chroma) makes a pattern refract per-channel out
+ * of the box: it stands in for Chroma while the knob sits at 0. */
 const PATTERNS = [
   { id: 'panes', label: 'Panes', field(nx, ny, s, t) {
     const n = Math.max(2, Math.round(3 + s * 6))
     const b = Math.floor(nx * n)
     const drift = t ? 0.25 * Math.sin(t + b) : 0
     return [band(b * 2) * 0.35, band(b * 2 + 1) + drift]
+  } },
+  /* labs "Tall Slivers" preset (panes at scale 3, shift 22:80) baked as a
+   * field: ~2× the pane count, offsets leaning vertical. */
+  { id: 'slivers', label: 'Slivers', field(nx, ny, s, t) {
+    const n = Math.max(4, Math.round(6 + s * 12))
+    const b = Math.floor(nx * n)
+    const drift = t ? 0.25 * Math.sin(t + b) : 0
+    return [band(b * 2) * 0.2, band(b * 2 + 1) + drift]
   } },
   { id: 'bands', label: 'Bands', field(nx, ny, s, t) {
     const n = Math.max(2, Math.round(3 + s * 6))
@@ -63,7 +73,24 @@ const PATTERNS = [
     const gy = fbm(nx * f + ph, (ny + e) * f) - base
     return [(gx / e) * 0.12, (gy / e) * 0.12]
   } },
+  /* labs "Prismatic" preset — the frosted fbm gradient dispersing R/G/B
+   * (preset chroma 65). */
+  { id: 'prismatic', label: 'Prismatic', dispersion: 65, field(nx, ny, s, t) {
+    const f = 2 + s * 3, e = 0.012, ph = t * 0.15
+    const base = fbm(nx * f + ph, ny * f)
+    const gx = fbm((nx + e) * f + ph, ny * f) - base
+    const gy = fbm(nx * f + ph, (ny + e) * f) - base
+    return [(gx / e) * 0.12, (gy / e) * 0.12]
+  } },
   { id: 'ripple', label: 'Ripple', field(nx, ny, s, t) {
+    const dx = nx - 0.5, dy = ny - 0.5
+    const r = Math.hypot(dx, dy) + 1e-4
+    const w = Math.sin(r * (8 + s * 22) - t * 2)
+    return [(dx / r) * w, (dy / r) * w]
+  } },
+  /* labs "Prism Ripple" preset — concentric ripples dispersing R/G/B
+   * (preset chroma 85). */
+  { id: 'prism-ripple', label: 'Prism Ripple', dispersion: 85, field(nx, ny, s, t) {
     const dx = nx - 0.5, dy = ny - 0.5
     const r = Math.hypot(dx, dy) + 1e-4
     const w = Math.sin(r * (8 + s * 22) - t * 2)
@@ -153,8 +180,11 @@ function displace(src, q) {
   const m = q.mix / 100
   const rad = (q.angle * Math.PI) / 180
   const ca = Math.cos(rad), sa = Math.sin(rad)
-  const cAmt = q.chroma / 100              // dispersion: per-channel displacement gain
-  const cRad = (q.chroma / 100) * w * 0.02 // radial lens fringe (px)
+  // dispersion-native patterns refract at their baked strength while the
+  // Chroma knob sits at 0; a nonzero Chroma takes over as usual.
+  const chroma = q.chroma > 0 ? q.chroma : (pat.dispersion ?? 0)
+  const cAmt = chroma / 100              // dispersion: per-channel displacement gain
+  const cRad = (chroma / 100) * w * 0.02 // radial lens fringe (px)
   const hw = w / 2, hh = h / 2
   const edge = q.edge
 
@@ -171,7 +201,7 @@ function displace(src, q) {
       const dy = (sa * v[0] + ca * v[1]) * ay
       const di = (y * w + x) << 2
 
-      if (q.chroma > 0) {
+      if (chroma > 0) {
         const rx = (x - hw) / hw, ry = (y - hh) / hh // radial unit
         const rX = edgeAt(fxBase + dx * (1 + cAmt) + rx * cRad, w, edge)
         const rY = edgeAt(y + dy * (1 + cAmt) + ry * cRad, h, edge)

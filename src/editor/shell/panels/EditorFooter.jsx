@@ -151,8 +151,6 @@ export default function EditorFooter() {
       <SegmentedToggle value={tab} onChange={setTab} options={TABS} className={TOGGLE_FIX} />
       <div className={tab === 'transport' ? undefined : 'hidden'}>
         <TransportBar />
-        {/* Audio analyser input for the audio-band modulation sources. */}
-        <AudioInputRow />
       </div>
       {tab === 'output' && (
         <div className="flex flex-col gap-3">
@@ -176,17 +174,22 @@ export default function EditorFooter() {
         </div>
       )}
       {tab === 'file' && (
-        photoLayer
-          ? <PhotoFileTab layer={photoLayer} />
-          : (
-            <SettingsFileTab
-              onSaveSettings={onSaveSettings}
-              onLoadSettings={onLoadSettings}
-              onSave={onSave}
-              onSaveAs={onSaveAs}
-              currentPresetId={currentPresetId}
-            />
-          )
+        <>
+          {photoLayer
+            ? <PhotoFileTab layer={photoLayer} />
+            : (
+              <SettingsFileTab
+                onSaveSettings={onSaveSettings}
+                onLoadSettings={onLoadSettings}
+                onSave={onSave}
+                onSaveAs={onSaveAs}
+                currentPresetId={currentPresetId}
+              />
+            )}
+          {/* Audio analyser input for the audio-band modulation sources —
+              File tab per labs (source: Off / Mic / File). */}
+          <AudioInputRow />
+        </>
       )}
     </div>
   )

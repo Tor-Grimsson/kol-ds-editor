@@ -12,6 +12,12 @@ import { loopDefaults } from './contract.js'
 import { SHAPE_LOOPS, SHAPE_PRESETS } from './shape/presets.js'
 import { FIELD_LOOPS, FIELD_PRESETS } from './field/presets.js'
 import { PATTERN_LOOPS, PATTERN_PRESETS } from './pattern/presets.js'
+/* Pattern Loops = the labs /loops-page pattern gallery — presets ONLY, driving
+ * the same 'pattern-rules' engine the Pattern category registers above. */
+import { PATTERNLOOP_PRESETS } from './patternloop/presets.js'
+/* Penrose = the labs generative-typography prototypes; round2 preset files
+ * plug into penrose/presets.js (not here) — this import stays the only one. */
+import { PENROSE_LOOPS, PENROSE_PRESETS } from './penrose/presets.js'
 import { SCANLINE_LOOPS, SCANLINE_PRESETS } from './scanline/presets.js'
 import { OPTIC_LOOPS, OPTIC_PRESETS } from './optic/presets.js'
 import { ABSTRACT_LOOPS, ABSTRACT_PRESETS } from './abstract/presets.js'
@@ -24,6 +30,8 @@ import { GL_GROUPS, GL_LOOPS, GL_PRESETS_BY_GROUP } from './gl/catalog.js'
 export const GROUPS = [
   { id: 'shape', label: 'Simple' },
   { id: 'pattern', label: 'Pattern' },
+  { id: 'patternloop', label: 'Pattern Loops' },
+  { id: 'penrose', label: 'Penrose' },
   { id: 'field', label: 'Field' },
   { id: 'scanline', label: 'Scanline' },
   { id: 'optic', label: 'Optic' },
@@ -35,13 +43,15 @@ export const GROUPS = [
 export const groupById = (id) => GROUPS.find((g) => g.id === id) || GROUPS[0]
 
 const LOOPS = [
-  ...SHAPE_LOOPS, ...FIELD_LOOPS, ...PATTERN_LOOPS,
+  ...SHAPE_LOOPS, ...FIELD_LOOPS, ...PATTERN_LOOPS, ...PENROSE_LOOPS,
   ...SCANLINE_LOOPS, ...OPTIC_LOOPS, ...ABSTRACT_LOOPS,
   ...MATH_LOOPS, ...PARATYPE_LOOPS, ...GL_LOOPS,
 ]
 const PRESETS_BY_GROUP = {
   shape: SHAPE_PRESETS,
   pattern: PATTERN_PRESETS,
+  patternloop: PATTERNLOOP_PRESETS,
+  penrose: PENROSE_PRESETS,
   field: FIELD_PRESETS,
   scanline: SCANLINE_PRESETS,
   optic: OPTIC_PRESETS,
@@ -51,7 +61,8 @@ const PRESETS_BY_GROUP = {
   ...GL_PRESETS_BY_GROUP,
 }
 export const PRESETS = [
-  ...SHAPE_PRESETS, ...PATTERN_PRESETS, ...FIELD_PRESETS,
+  ...SHAPE_PRESETS, ...PATTERN_PRESETS, ...PATTERNLOOP_PRESETS, ...PENROSE_PRESETS,
+  ...FIELD_PRESETS,
   ...SCANLINE_PRESETS, ...OPTIC_PRESETS, ...ABSTRACT_PRESETS,
   ...MATH_PRESETS, ...PARATYPE_PRESETS,
   ...Object.values(GL_PRESETS_BY_GROUP).flat(),
@@ -82,6 +93,11 @@ const BG_MIX_IDS = new Set([
   'gradient-field', 'stripes', 'interference',  // field: colA→colB pixel ramps
   'optic-moire',                                // hexToRgb(colA) colour math
   'math-spinner',                               // persistence fade fills bg
+  'math-field',                                 // low→high heatmap pixel ramp
+  'math-orbits',                                // trail fade fills bg
+  /* penrose: free-running sims — trail-fade protos wash translucent bg and
+   * the host paints bg under every blit; covers round2 automatically. */
+  ...PENROSE_LOOPS.map((l) => l.id),
 ])
 export const loopBgToggleable = (def) =>
   !!def && !BG_MIX_IDS.has(def.id) && (

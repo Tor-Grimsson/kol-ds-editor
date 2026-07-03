@@ -121,7 +121,7 @@ const v = {
   },
 }
 
-function orbitEye(yaw, pitch, dist, target = [0, 0, 0]) {
+export function orbitEye(yaw, pitch, dist, target = [0, 0, 0]) {
   const cp = Math.cos(pitch)
   return [
     target[0] + dist * cp * Math.sin(yaw),
@@ -132,7 +132,8 @@ function orbitEye(yaw, pitch, dist, target = [0, 0, 0]) {
 
 // Build a world-point → [screenX, screenY] projector for a camera state.
 // Real lookAt basis + perspective divide; auto-fits the figure's extent.
-function projector(eye, target, W, H, ext) {
+// (Exported — curves.js drives the same projector; keep ONE copy.)
+export function projector(eye, target, W, H, ext) {
   const up = [0, 1, 0]
   const forward = v.norm(v.sub(target, eye))
   let right = v.cross(forward, up)

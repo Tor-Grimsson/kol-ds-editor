@@ -1,17 +1,26 @@
 // Math loops (group 'math', label 'Math') — the canvas2d generative engines
 // ported from kol-labs-single src/pages/math/: spinner (free-running thread
 // accumulation), threads (pure-u windmill drag), surface (z=f(x,y) heightfield
-// + strange attractors behind the hand-rolled projector). A preset names a base
-// loop + a partial param override, same idiom as shape/field.
+// + strange attractors behind the hand-rolled projector), waveform (Fourier
+// epicycle synthesis), fields (scalar heatmap + flow · complex domain
+// coloring), curves (the uzumaki parametric clip library) and orbits
+// (free-running n-body trails). A preset names a base loop + a partial param
+// override, same idiom as shape/field.
 //
 // Preset patches are the labs SPINNER_PRESETS / THREADS_PRESETS /
-// SURFACE_PRESETS, expressed as diffs over the loop defaults.
+// SURFACE_PRESETS / WAVEFORM_PRESETS / FIELD_PRESETS / PARAMETRIC_PRESETS,
+// expressed as diffs over the loop defaults. The waveform presets' `palette`
+// quick-picks are resolved to their labs THEMES bg/fg hexes.
 
 import spinner from './spinner.js'
 import threads from './threads.js'
 import surface from './surface.js'
+import waveform from './waveform.js'
+import fields from './fields.js'
+import curves from './curves.js'
+import orbits from './orbits.js'
 
-export const MATH_LOOPS = [spinner, threads, surface]
+export const MATH_LOOPS = [spinner, threads, surface, waveform, fields, curves, orbits]
 
 const P = (id, label, loop, params = {}, sub) => ({ id, label, loop, params, sub })
 
@@ -47,4 +56,26 @@ export const MATH_PRESETS = [
   P('surface-lorenz', 'Lorenz', 'math-surface', { kind: 'attractor', attractor: 'lorenz', stroke: '#9ec1ff', gradient: true }, 'Attractors'),
   P('surface-rossler', 'Rössler', 'math-surface', { kind: 'attractor', attractor: 'rossler', stroke: '#ffd23f', steps: 9000 }, 'Attractors'),
   P('surface-aizawa', 'Aizawa', 'math-surface', { kind: 'attractor', attractor: 'aizawa', stroke: '#ff5470' }, 'Attractors'),
+  // Waveforms — Fourier epicycle synthesis; each preset = wave + palette +
+  // motion personality (labs WAVEFORM_PRESETS). Animate is the labs ClipEditor
+  // tool, ported as its polar-rose base clip drawn in on the curves loop.
+  P('wave-epicycle', 'Epicycle', 'math-waveform', { wave: 'square', harmonics: 8, speed: 0.3, rolloff: 0, bg: '#0c0a06', fg: '#ffb35c' }, 'Waveforms'),
+  P('wave-harmonic', 'Harmonic', 'math-waveform', { wave: 'triangle', harmonics: 6, speed: 0.25, rolloff: 0, bg: '#f4f1ea', fg: '#16202e' }, 'Waveforms'),
+  P('wave-overtone', 'Overtone', 'math-waveform', { wave: 'sawtooth', harmonics: 16, speed: 0.6, rolloff: 0.4, bg: '#0a0a0a', fg: '#ededed' }, 'Waveforms'),
+  P('wave-phasor', 'Phasor', 'math-waveform', { wave: 'square', harmonics: 4, speed: 0.2, swing: 24, bg: '#0b1d3a', fg: '#8fd3ff' }, 'Waveforms'),
+  P('wave-spectrum', 'Spectrum', 'math-waveform', { wave: 'sawtooth', harmonics: 12, speed: 0.45, stagger: 0.45, bg: '#050506', fg: '#9ec1ff' }, 'Waveforms'),
+  P('wave-resonance', 'Resonance', 'math-waveform', { wave: 'triangle', harmonics: 9, speed: 0.3, pulse: 0.6, bg: '#0c0a06', fg: '#ffb35c' }, 'Waveforms'),
+  P('wave-animate', 'Animate', 'math-curves', { clip: 'animate-rose', mode: 'reveal', stroke: '#9ec1ff', weight: 1.6 }, 'Waveforms'),
+  // Fields — f(x,y) heatmap + flow particles · complex f(z) domain coloring
+  // (labs FIELD_PRESETS over the fields FALLBACK).
+  P('field-waves', 'Waves', 'math-field', { kind: 'scalar', fn: 'waves', range: 8, low: '#0b1530', high: '#ffce54' }, 'Fields'),
+  P('field-ripples', 'Ripples', 'math-field', { kind: 'scalar', fn: 'ripples', range: 10, low: '#1a0b2e', high: '#ff5470' }, 'Fields'),
+  P('field-saddle', 'Saddle', 'math-field', { kind: 'scalar', fn: 'saddle', range: 8, low: '#04140f', high: '#c9f29b' }, 'Fields'),
+  P('field-roots2', 'z² − 1', 'math-field', { kind: 'complex', funcId: 'z2-1', range: 6, coloring: 'rings' }, 'Fields'),
+  P('field-recip', '1 / z', 'math-field', { kind: 'complex', funcId: 'inv', range: 4, coloring: 'smooth' }, 'Fields'),
+  P('field-sinz', 'sin z', 'math-field', { kind: 'complex', funcId: 'sin', range: 6, coloring: 'contour' }, 'Fields'),
+  // Parametric — the two labs presets spinner/threads hadn't already claimed:
+  // curves (the uzumaki clip library) + orbits (n-body trails).
+  P('param-curves', 'Curves', 'math-curves', {}, 'Parametric'),
+  P('param-orbits', 'Orbits', 'math-orbits', {}, 'Parametric'),
 ]

@@ -4,7 +4,7 @@ import { enableAudio, disableAudio, audioSourceKind } from './audioBands'
 
 /**
  * AudioInputRow — picks the analyser input for the audio-band modulation
- * sources (Off · Mic · Track). Track opens a file picker and loops the
+ * sources (Off · Mic · File, labs order). File opens a picker and loops the
  * upload audibly through the analyser. Binding an audio source also
  * auto-enables the mic (ensure()) — this row is for switching to a track
  * or turning the analyser off.
@@ -12,7 +12,7 @@ import { enableAudio, disableAudio, audioSourceKind } from './audioBands'
 const OPTIONS = [
   { value: 'off',  label: 'Off' },
   { value: 'mic',  label: 'Mic' },
-  { value: 'file', label: 'Track' },
+  { value: 'file', label: 'File' },
 ]
 
 export default function AudioInputRow() {

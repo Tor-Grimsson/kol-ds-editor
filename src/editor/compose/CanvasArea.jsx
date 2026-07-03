@@ -5,6 +5,7 @@ import LayerRenderer from './LayerRenderer'
 import SelectionOverlay from './SelectionOverlay'
 import PathNodeOverlay from './PathNodeOverlay'
 import { pathD, normalizePath, normalizePathRings, rotatePathNodes, scalePathNodes, dist } from './path-math'
+import { scaleBoolChildren } from './boolean-ops'
 import CropOverlay from './CropOverlay'
 import { matchAny } from '../state/keymap'
 import { useTool } from '../state/tools'
@@ -368,6 +369,9 @@ export default function CanvasArea() {
            * plain ratio-scaling keeps them in sync. */
           nodes: selectedLayer.type === 'path' ? selectedLayer.nodes : undefined,
           holes: selectedLayer.type === 'path' ? selectedLayer.holes : undefined,
+          /* Children snapshot (bool layers) — resize scales the operands so
+           * the computed result tracks the box, path-node style. */
+          children: selectedLayer.type === 'bool' ? selectedLayer.children : undefined,
         },
       })
       return
@@ -527,6 +531,11 @@ export default function CanvasArea() {
         const ky = h / startBox.h
         patch.nodes = scalePathNodes(startBox.nodes, kx, ky)
         if (startBox.holes) patch.holes = startBox.holes.map((r) => scalePathNodes(r, kx, ky))
+      }
+      /* Bool: scale the children (boxes + path geometry) with the box so
+       * the recomputed result tracks the resize. */
+      if (startBox.children) {
+        patch.children = scaleBoolChildren(startBox.children, w / startBox.w, h / startBox.h)
       }
       updateLayer(layerId, patch)
     }

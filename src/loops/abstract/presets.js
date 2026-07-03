@@ -136,8 +136,10 @@ const mstpLoop = {
   },
 }
 
+/* Every scale set × every colour set (labs mstp.js carries five: candy,
+ * spectrum, gold, ocean, mono) — 4 × 5 = 20 combos. */
 const MSTP_LOOP_PRESETS = MSTP_PRESETS.flatMap((sp) =>
-  MSTP_COLORS.slice(0, 2).map((c) => ({
+  MSTP_COLORS.map((c) => ({
     id: `mstp-${sp.id}-${c.value}`,
     label: `${sp.label} · ${c.label}`,
     loop: 'abstract-mstp',

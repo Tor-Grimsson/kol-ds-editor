@@ -15,3 +15,16 @@ export const BACKDROPS = [
   { value: 'abyss', label: 'Abyss', col: '#04101c' },
   { value: 'plum', label: 'Plum', col: '#140a1e' },
 ]
+
+// Look presets (labs gradients LOOK_PRESETS) — palette/iridescence recipes
+// applied over any gradient type. 'custom' = no recipe; the manual colour
+// knobs (spectral/palette/hue/irid) only act while it's selected.
+export const GRAD_LOOKS = [
+  { value: 'custom', label: 'Custom', p: null },
+  { value: 'spectrum', label: 'Spectrum', p: { palette: 'spectrum', spectral: true, hue: 0, irid: 1.3 } },
+  { value: 'iris', label: 'Iris', p: { palette: 'iris', spectral: false, hue: 0.1, irid: 1.1 } },
+  { value: 'aqua', label: 'Aqua', p: { palette: 'aqua', spectral: false, hue: 0.5, irid: 1.0 } },
+  { value: 'magma', label: 'Magma', p: { palette: 'magma', spectral: false, hue: 0.08, irid: 0.9 } },
+  { value: 'candy', label: 'Candy', p: { palette: 'candy', spectral: false, hue: 0.8, irid: 1.2 } },
+  { value: 'noir', label: 'Noir', p: { palette: 'spectrum', spectral: false, hue: 0, irid: 0.45, backdrop: 'black' } },
+]

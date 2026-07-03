@@ -9,7 +9,7 @@ import BindDot from '../../params/BindDot'
 import { schemaDefaults, paramTab } from '../../params/schema'
 import { loopById } from '../../../loops/registry'
 import { FILTERS, filterById } from '../../../filters'
-import { effectCategories, categoryOf } from './effectCategories'
+import { effectCategories, categoryOf, presetParamOf } from './effectCategories'
 
 /**
  * EffectsPanel — the Effects tab of the right rail (review r3: the effect
@@ -108,16 +108,32 @@ function LayerEffects({ layer }) {
   }
 
   const renderAnimate = (p) => <BindDot layer={layer} param={p} setProp={setProp} />
-  const effectParams = activeAllowed ? activeFilter.params.filter((p) => paramTab(p) !== 'anim') : []
+  /* Hierarchy level 4 — the filter's preset param (mode/look/pattern…)
+   * surfaces as "Preset" above the tab strip and leaves the params list. */
+  const presetKey = activeAllowed ? presetParamOf(activeFilter.id) : null
+  const presetParam = presetKey ? activeFilter.params.find((p) => p.key === presetKey) : null
+  const effectParams = activeAllowed
+    ? activeFilter.params.filter((p) => paramTab(p) !== 'anim' && p !== presetParam)
+    : []
 
   return (
     <div className="flex flex-col gap-4">
-      <LabeledControl label="Category">
+      <LabeledControl label="Type">
         <Dropdown variant="subtle" size="sm" className="w-full" options={catOptions} value={cat} onChange={setCat} />
       </LabeledControl>
-      <LabeledControl label="Effect">
+      <LabeledControl label="Category">
         <Dropdown variant="subtle" size="sm" className="w-full" options={fxOptions} value={fxValue} onChange={onPick} />
       </LabeledControl>
+      {presetParam && (
+        <LabeledControl label="Preset">
+          <Dropdown
+            variant="subtle" size="sm" className="w-full"
+            options={presetParam.options}
+            value={layer[presetParam.key] ?? presetParam.default}
+            onChange={(v) => setProp(presetParam.key, v)}
+          />
+        </LabeledControl>
+      )}
 
       {activeAllowed && layer.imgW != null && (
         <span className="kol-helper-12 text-meta">Filters don't apply to cropped photos.</span>

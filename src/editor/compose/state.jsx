@@ -9,14 +9,14 @@ import { computeFrameGlyphs } from '../modes/type/buildTypeSvg'
 import { findLayerDeep } from './helpers'
 import { scalePathNodes, shiftNode, rotatePathNodes, normalizePath, normalizePathRings } from './path-math'
 import { shapeToPathNodes } from './shape-math'
-import { booleanCombine, isBooleanable } from './boolean-ops'
+import { booleanCombine, computeBoolean, hasBooleanGeometry, isBooleanable, refitBoolLayer } from './boolean-ops'
 import { presetById, presetParams } from '../../loops/registry'
 import { kineticPresetById, presetComp } from '../../kinetic/presets'
 
 /* Layer types that own a `color` (and may own a `stroke`). Single source
  * of truth — `useColorTarget` and the inspector both consult this set
  * instead of duplicating the literal. */
-export const COLOR_LAYER_TYPES = new Set(['background', 'pattern', 'shape', 'text', 'path'])
+export const COLOR_LAYER_TYPES = new Set(['background', 'pattern', 'shape', 'text', 'path', 'bool'])
 
 const DRAFT_KEY = 'kol.editor.draft'
 
@@ -42,6 +42,8 @@ const DRAFT_KEY = 'kol.editor.draft'
  *   - text        { text, width, weight, italic, size, tracking,       — full Type Lab typography, positioned
  *                   lineHeight, case, textAlign, color, x, y, w, h }
  *   - group       { children: [...layers], x, y, w, h }                — container; children store group-relative coords
+ *   - bool        { op, children: [...layers], x, y, w, h }            — non-destructive boolean group; children store
+ *                                                                        group-relative coords and render as ONE combined path
  *
  * Selection — `selectedIds` is an array of currently-selected layer ids
  * (multi-select via shift-click in LayerStack). `selectedId` (singular) is
@@ -59,6 +61,113 @@ const generateFor = (poolId, modeId, currentColors, locks) => {
 }
 
 const newId = (type) => `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
+
+/* Immutable deep patch: match `id` through group/bool children so layers
+ * selected from the panel stay editable wherever they live. Untouched
+ * branches keep their identity (render caches key on it); no match returns
+ * the input list unchanged. Bool layers whose children (or op) changed are
+ * refit on the way back up — deepest first, so a nested bool's new frame
+ * feeds its parent's bounds — keeping the frame hugging the result. */
+function patchLayerDeep(list, id, partial) {
+  let changed = false
+  const next = list.map((l) => {
+    if (l.id === id) {
+      changed = true
+      const patched = { ...l, ...partial }
+      return patched.type === 'bool' && ('op' in partial || 'children' in partial)
+        ? refitBoolLayer(patched)
+        : patched
+    }
+    if (Array.isArray(l.children)) {
+      const kids = patchLayerDeep(l.children, id, partial)
+      if (kids !== l.children) {
+        changed = true
+        const updated = { ...l, children: kids }
+        return l.type === 'bool' ? refitBoolLayer(updated) : updated
+      }
+    }
+    return l
+  })
+  return changed ? next : list
+}
+
+/* Immutable deep remove of `id`; bool ancestors refit bottom-up. Returns
+ * the input list unchanged when `id` isn't found. */
+function removeLayerDeep(list, id) {
+  let changed = false
+  const next = []
+  for (const l of list) {
+    if (l.id === id) { changed = true; continue }
+    if (Array.isArray(l.children)) {
+      const kids = removeLayerDeep(l.children, id)
+      if (kids !== l.children) {
+        changed = true
+        const updated = { ...l, children: kids }
+        next.push(l.type === 'bool' ? refitBoolLayer(updated) : updated)
+        continue
+      }
+    }
+    next.push(l)
+  }
+  return changed ? next : list
+}
+
+/* Immutable deep insert of `layer` into `parentId`'s children (null =
+ * top level) at `index` (clamped); bool ancestors refit bottom-up. */
+function insertLayerDeep(list, parentId, index, layer) {
+  if (parentId == null) {
+    const next = [...list]
+    next.splice(Math.max(0, Math.min(next.length, index)), 0, layer)
+    return next
+  }
+  let changed = false
+  const next = list.map((l) => {
+    if (l.id === parentId) {
+      changed = true
+      const kids = [...(l.children ?? [])]
+      kids.splice(Math.max(0, Math.min(kids.length, index)), 0, layer)
+      const updated = { ...l, children: kids }
+      return l.type === 'bool' ? refitBoolLayer(updated) : updated
+    }
+    if (Array.isArray(l.children)) {
+      const kids = insertLayerDeep(l.children, parentId, index, layer)
+      if (kids !== l.children) {
+        changed = true
+        const updated = { ...l, children: kids }
+        return l.type === 'bool' ? refitBoolLayer(updated) : updated
+      }
+    }
+    return l
+  })
+  return changed ? next : list
+}
+
+/* Locate `id` anywhere in the layer tree. Returns { layer, parent (null =
+ * top level), index, originX, originY } where origin is the ABSOLUTE canvas
+ * origin of the coord space the layer's x/y live in, or null if not found. */
+function locateLayer(list, id, ox = 0, oy = 0, parent = null) {
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i]
+    if (l.id === id) return { layer: l, parent, index: i, originX: ox, originY: oy }
+    if (Array.isArray(l.children)) {
+      const found = locateLayer(l.children, id, ox + (l.x ?? 0), oy + (l.y ?? 0), l)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+/* Joint bbox of a set of positioned layers — bool-group fallback when the
+ * computed result is empty (e.g. intersect of disjoint shapes). */
+function jointBbox(layers) {
+  const x = Math.min(...layers.map((l) => l.x ?? 0))
+  const y = Math.min(...layers.map((l) => l.y ?? 0))
+  return {
+    x, y,
+    w: Math.max(1, Math.max(...layers.map((l) => (l.x ?? 0) + (l.w ?? 0))) - x),
+    h: Math.max(1, Math.max(...layers.map((l) => (l.y ?? 0) + (l.h ?? 0))) - y),
+  }
+}
 
 /* Virtual canvas dimensions used for all layer positioning. The Canvas
    component scales this 1080-virtual space to fit the viewport. */
@@ -504,7 +613,7 @@ export function ComposeStateProvider({ children }) {
   }, [selectedIds, removeLayer, beginTransaction, commitTransaction])
 
   const updateLayer = useCallback((id, partial) => {
-    setLayersTracked((prev) => prev.map((l) => (l.id === id ? { ...l, ...partial } : l)))
+    setLayersTracked((prev) => patchLayerDeep(prev, id, partial))
   }, [setLayersTracked])
 
   const toggleLayer = useCallback((id) => {
@@ -543,18 +652,58 @@ export function ComposeStateProvider({ children }) {
     commitTransaction()
   }, [selectedIds, flipLayer, beginTransaction, commitTransaction])
 
-  /* Combine the selected closed vector layers (paths + basic shape kinds)
-   * with a boolean op ('unite' | 'subtract' | 'intersect' | 'exclude').
-   * Operands run in z-order bottom-first (subtract = bottom minus uppers,
-   * Figma semantics). Inputs are replaced by one `path` layer at the
-   * topmost input's z-position, adopting the bottom layer's paint.
-   * Destructive v1 — no boolean groups. Empty results (disjoint intersect)
-   * are a no-op. */
-  const booleanSelected = useCallback((op) => {
+  /* Wrap the selected closed vector layers (paths + basic shape kinds +
+   * other bool groups) in a NON-DESTRUCTIVE `bool` group ('unite' |
+   * 'subtract' | 'intersect' | 'exclude'). Operands become `children` in
+   * z-order bottom-first (subtract = bottom minus uppers, Figma semantics),
+   * stored in group-relative coords like `group` children. The group lands
+   * at the topmost operand's z-position and adopts the bottom operand's
+   * paint — same placement + paint rule the old destructive combine used.
+   * Geometry stays live (computeBoolean re-runs on child edits); an empty
+   * result (disjoint intersect) still wraps, boxed to the operands' joint
+   * bbox, so the group remains manipulable. `flattenSelected` bakes it. */
+  const booleanGroup = useCallback((op) => {
     const current = layersRef.current
     const targets = current.filter((l) => selectedIds.includes(l.id) && isBooleanable(l))
     if (targets.length < 2) return
-    const result = booleanCombine(targets, op)
+    const base = targets[0]
+    const box = computeBoolean(targets, op)?.bounds ?? jointBbox(targets)
+    const id = newId('bool')
+    setLayersTracked((prev) => {
+      const targetIds = new Set(targets.map((t) => t.id))
+      const topIdx = Math.max(...prev.map((l, i) => (targetIds.has(l.id) ? i : -1)))
+      const newLayer = {
+        id, type: 'bool', op,
+        visible: true, opacity: base.opacity ?? 1, blend: base.blend ?? 'normal',
+        x: box.x, y: box.y, w: box.w, h: box.h,
+        color: base.color ?? 'palette:dark',
+        stroke: base.stroke ?? null,
+        strokeWidth: base.strokeWidth ?? 0,
+        children: targets.map((t) => ({ ...t, x: (t.x ?? 0) - box.x, y: (t.y ?? 0) - box.y })),
+      }
+      const next = []
+      prev.forEach((l, i) => {
+        if (i === topIdx) next.push(newLayer)
+        if (!targetIds.has(l.id)) next.push(l)
+      })
+      return next
+    })
+    setSelectedIds([id])
+  }, [selectedIds, setLayersTracked])
+
+  /* Flatten — bake boolean geometry to a real `path` layer (the old
+   * destructive result):
+   *   - one selected bool group  → replaced by its computed path.
+   *   - ≥2 eligible vector layers → destructive unite (Figma ⌘E semantics).
+   * Result lands at the topmost input's z-position, adopting the bottom
+   * input's paint. Empty results are a no-op. Tracked through history. */
+  const flattenSelected = useCallback(() => {
+    const current = layersRef.current
+    const targets = current.filter((l) => selectedIds.includes(l.id) && isBooleanable(l))
+    if (targets.length === 0) return
+    /* A lone non-bool layer has nothing to flatten. */
+    if (targets.length === 1 && targets[0].type !== 'bool') return
+    const result = booleanCombine(targets, 'unite')
     if (!result || (result.nodes?.length ?? 0) < 2) return
     const norm = normalizePathRings(result.nodes, result.holes)
     const base = targets[0]
@@ -631,6 +780,9 @@ export function ComposeStateProvider({ children }) {
       if (i < 0) return prev
       const src = prev[i]
       const clone = { ...src, id: newId(src.type) }
+      /* Group/bool children get fresh ids too — duplicated child ids would
+       * make panel-side child edits write into both copies at once. */
+      if (Array.isArray(clone.children)) clone.children = reidLayers(clone.children)
       if (clone.x != null) { clone.x += 24; clone.y += 24 }
       const next = [...prev]
       next.splice(i + 1, 0, clone)
@@ -716,6 +868,71 @@ export function ComposeStateProvider({ children }) {
       return next
     })
     if (restoredIds.length) setSelectedIds(restoredIds)
+  }, [setLayersTracked])
+
+  /* Release a boolean (Figma's release, the un-boolean): the bool layer is
+   * replaced in place by its children at their canvas-absolute positions,
+   * original z-order preserved. Selection moves to the released layers.
+   * Distinct from flattenSelected, which bakes to one path. `id` defaults
+   * to the current selection. Top-level bools only, like ungroupLayer. */
+  const releaseBoolean = useCallback((id = selectedIdsRef.current[0]) => {
+    let restoredIds = []
+    setLayersTracked((prev) => {
+      const i = prev.findIndex((l) => l.id === id)
+      if (i < 0) return prev
+      const bool = prev[i]
+      if (bool.type !== 'bool') return prev
+      const restored = (bool.children ?? []).map((c) => ({
+        ...c,
+        x: (c.x ?? 0) + (bool.x ?? 0),
+        y: (c.y ?? 0) + (bool.y ?? 0),
+      }))
+      restoredIds = restored.map((c) => c.id)
+      const next = [...prev]
+      next.splice(i, 1, ...restored)
+      return next
+    })
+    if (restoredIds.length) setSelectedIds(restoredIds)
+  }, [setLayersTracked])
+
+  /* Reparent a layer (panel drag): move `id` into `targetParentId`'s
+   * children (a group/bool id, or null for the top level) at `index` —
+   * the insertion position in the target's child order AFTER the layer
+   * left its old spot. Coords convert through absolute canvas space so the
+   * layer doesn't move visually; bool containers on both paths refit.
+   * Rejected: unknown ids, non-container targets, cycles (a container into
+   * its own descendant), and non-boolean geometry into a bool (only closed
+   * paths / basic shapes / bools contribute to a result — anything else
+   * would silently vanish, since bool children don't render individually). */
+  const reparentLayer = useCallback((id, targetParentId = null, index = 0) => {
+    if (!id || id === 'canvas' || id === targetParentId) return
+    let didMove = false
+    setLayersTracked((prev) => {
+      const src = locateLayer(prev, id)
+      if (!src) return prev
+      const moving = src.layer
+      if (targetParentId != null) {
+        const target = findLayerDeep(prev, targetParentId)
+        if (!target || (target.type !== 'group' && target.type !== 'bool')) return prev
+        if (findLayerDeep([moving], targetParentId)) return prev          /* cycle */
+        if (target.type === 'bool' && !hasBooleanGeometry(moving)) return prev
+      }
+      const absX = src.originX + (moving.x ?? 0)
+      const absY = src.originY + (moving.y ?? 0)
+      const removed = removeLayerDeep(prev, id)
+      /* Target origin measured POST-removal — pulling the layer out may
+       * have refit an ancestor bool and moved the target's coord space. */
+      let ox = 0, oy = 0
+      if (targetParentId != null) {
+        const t = locateLayer(removed, targetParentId)
+        if (!t) return prev
+        ox = t.originX + (t.layer.x ?? 0)
+        oy = t.originY + (t.layer.y ?? 0)
+      }
+      didMove = true
+      return insertLayerDeep(removed, targetParentId, index, { ...moving, x: absX - ox, y: absY - oy })
+    })
+    if (didMove) setSelectedIds([id])
   }, [setLayersTracked])
 
   /* Align the currently-selected positioned layers to their common bbox.
@@ -921,13 +1138,13 @@ export function ComposeStateProvider({ children }) {
     setSelectedIds([group.id])
   }, [setLayersTracked, palette])
 
-  /* Re-id layers (and nested group children) so loaded presets don't
+  /* Re-id layers (and nested group/bool children) so loaded presets don't
    * collide with anything already in the canvas — each load produces fresh
    * ids regardless of what the source preset stored. */
   const reidLayers = (arr) => (Array.isArray(arr) ? arr : []).map((l) => ({
     ...l,
     id: newId(l.type ?? 'layer'),
-    ...(l.type === 'group' && Array.isArray(l.children)
+    ...(Array.isArray(l.children)
       ? { children: reidLayers(l.children) }
       : {}),
   }))
@@ -1213,8 +1430,10 @@ export function ComposeStateProvider({ children }) {
     /* layers */
     layers,
     addLayer, removeLayer, updateLayer, toggleLayer, toggleLayerLock, moveLayer, duplicateLayer, clearLayers, deleteSelected,
-    flipLayer, flipSelected, booleanSelected, convertShapeToPath,
-    groupLayers, ungroupLayer, alignSelected, flattenPattern, flattenText, addFlattenedFromFrame, loadPreset, insertFromLibrary,
+    /* booleanSelected kept as an alias — existing call sites now wrap
+     * non-destructively; switch them to booleanGroup at leisure. */
+    flipLayer, flipSelected, booleanGroup, booleanSelected: booleanGroup, flattenSelected, convertShapeToPath,
+    groupLayers, ungroupLayer, releaseBoolean, reparentLayer, alignSelected, flattenPattern, flattenText, addFlattenedFromFrame, loadPreset, insertFromLibrary,
 
     /* history */
     canUndo: past.length > 0,

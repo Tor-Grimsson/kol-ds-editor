@@ -5,6 +5,7 @@ import { Input } from '@kolkrabbi/kol-component'
 import { Dropdown, MenuDropdownItem, MenuDropdownNest, usePopover, PopoverPanel } from '@kolkrabbi/kol-component'
 import { useComposeState, LAYER_TYPES } from './state'
 import { rowLabelForLayer } from './labels'
+import { findLayerDeep } from './helpers'
 
 /**
  * Layer stack — left rail of the editor.
@@ -27,6 +28,7 @@ const TYPE_ICONS = {
   shape:      'layer-shape',
   text:       'layer-text',
   group:      'layer-group',
+  bool:       'layer-group',
   loop:       'layer-loop',
   kinetic:    'layer-kinetic',
 }
@@ -42,13 +44,14 @@ export const BLEND_MODES = [
 ]
 
 function LayerRow({
-  layer, active, palette,
+  layer, active, tinted, palette,
   groupCollapsed, onToggleGroup,
   onSelect, onShiftSelect, onToggleVisibility, onToggleLock, onRename,
   draggedId, dropTargetId, dropPosition,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }) {
-  const isGroup = layer.type === 'group'
+  /* bool groups are containers too — chevron + expandable children. */
+  const isGroup = layer.type === 'group' || layer.type === 'bool'
 
   const isDragging  = draggedId === layer.id
   const isDropAbove = dropTargetId === layer.id && dropPosition === 'above'
@@ -101,6 +104,7 @@ function LayerRow({
         onDragEnd={onDragEnd}
         className={
           `kol-compose-layer-row${active ? ' is-active' : ''}` +
+          `${tinted && !active ? ' is-tinted' : ''}` +
           `${!layer.visible ? ' is-hidden' : ''}` +
           `${isDragging ? ' is-dragging' : ''}` +
           `${isDropAbove ? ' is-drop-above' : ''}` +
@@ -151,7 +155,7 @@ function LayerRow({
           onClick={onToggleVisibility}
           title={layer.visible ? 'Hide' : 'Show'}
           aria-pressed={!layer.visible}
-          className={`absolute inset-y-0 right-7 w-7 inline-flex items-center justify-center rounded text-meta hover:text-emphasis hover:bg-fg-08 transition-opacity ${!layer.visible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+          className={`absolute inset-y-0 right-7 w-7 inline-flex items-center justify-center rounded text-meta hover:text-emphasis hover:bg-fg-08 transition-opacity ${active || !layer.visible ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
         >
           <EditorIcon name={layer.visible ? 'eye-on' : 'eye-off'} size={12} />
         </button>
@@ -160,7 +164,7 @@ function LayerRow({
           onClick={onToggleLock}
           title={layer.locked ? 'Unlock' : 'Lock'}
           aria-pressed={!!layer.locked}
-          className={`absolute inset-y-0 right-0 w-7 inline-flex items-center justify-center rounded hover:bg-fg-08 transition-opacity ${layer.locked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 text-meta hover:text-emphasis'}`}
+          className={`absolute inset-y-0 right-0 w-7 inline-flex items-center justify-center rounded hover:bg-fg-08 transition-opacity ${active || layer.locked ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} ${layer.locked ? '' : 'text-meta hover:text-emphasis'}`}
           style={layer.locked ? { color: 'var(--kol-accent-primary)' } : undefined}
         >
           <EditorIcon name={layer.locked ? 'lock' : 'unlock'} size={12} />
@@ -209,7 +213,10 @@ const SHAPE_KINDS = [
   { id: 'star',     label: 'Star',      icon: 'tool-star',     extras: { kind: 'star', points: 5, innerRatio: 0.5 } },
 ]
 
-function AddLayerButton({ addLayer }) {
+/* Exported — lives in the Layers/Assets tab row (LayersAssetsPanel), not
+ * the stack footer. Self-sources addLayer so the panel stays dumb. */
+export function AddLayerButton() {
+  const { addLayer } = useComposeState()
   const [open, setOpen] = useState(false)
   const popover = usePopover({
     open,
@@ -274,12 +281,10 @@ function AddLayerButton({ addLayer }) {
   )
 }
 
-/* CanvasRow — bottom-most row in the layer stack, representing the canvas
- * itself. Always present, can't be deleted. Selecting it routes the
- * inspector to CanvasInspector (fill / opacity). */
-/* CanvasRow — parent of every other layer, always rendered at the top of
- * the stack. The chevron toggles showing / hiding all child layers below.
- * Selecting Canvas routes the inspector to CanvasInspector. */
+/* CanvasRow — the container row at the top of the stack (Figma frame
+ * model: everything nests one step inside it). Always present, can't be
+ * deleted; chevron collapses its contents and, like every chevron here,
+ * paints on panel hover only. Selecting it routes to CanvasInspector. */
 function CanvasRow({ active, collapsed, onToggleCollapse, onSelect }) {
   return (
     <div className="kol-compose-layer-line group">
@@ -308,23 +313,42 @@ function CanvasRow({ active, collapsed, onToggleCollapse, onSelect }) {
           <span className="kol-compose-layer-btn-icon" aria-hidden="true">
             <EditorIcon name="maximize" size={14} />
           </span>
-          <span className="kol-mono-12 truncate flex-1 text-left">Canvas</span>
+          {/* helper-12 like every layer row — mono-12 read heavier than the stack */}
+          <span className="kol-helper-12 truncate flex-1 text-left">Canvas</span>
         </button>
       </div>
     </div>
   )
 }
 
-function ChildRow({ layer, active, onSelect, onShiftSelect }) {
+function ChildRow({
+  layer, active, tinted, parentId, onSelect, onShiftSelect,
+  draggedId, dropTargetId, dropPosition,
+  onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
+}) {
   const handlers = useShiftClickHandlers(onSelect, onShiftSelect)
+  const isDragging  = draggedId === layer.id
+  const isDropAbove = dropTargetId === layer.id && dropPosition === 'above'
+  const isDropBelow = dropTargetId === layer.id && dropPosition === 'below'
   return (
     <div className="kol-compose-layer-line">
       <span aria-hidden="true" className="kol-compose-layer-collapse" />
       <button
         type="button"
+        draggable
+        onDragStart={(e) => onDragStart(e, layer.id)}
+        onDragOver={(e) => onDragOver(e, layer.id, parentId)}
+        onDragLeave={(e) => onDragLeave(e, layer.id)}
+        onDrop={(e) => onDrop(e, layer.id, parentId)}
+        onDragEnd={onDragEnd}
         onMouseDown={handlers.onMouseDown}
         onClick={handlers.onClick}
-        className={`kol-compose-layer-row${active ? ' is-active' : ''}`}
+        className={
+          `kol-compose-layer-row${active ? ' is-active' : ''}${tinted && !active ? ' is-tinted' : ''}` +
+          `${isDragging ? ' is-dragging' : ''}` +
+          `${isDropAbove ? ' is-drop-above' : ''}` +
+          `${isDropBelow ? ' is-drop-below' : ''}`
+        }
         data-layer-id={layer.id}
       >
         <span className="kol-compose-layer-main">
@@ -347,7 +371,7 @@ export default function LayerStack() { return <LayerStackBody /> }
 export function LayerStackBody() {
   const {
     selectedId, selectedIds, select, selectCanvas, toggleSelection, groupLayers,
-    layers, addLayer, removeLayer, deleteSelected, toggleLayer, toggleLayerLock, updateLayer, moveLayer,
+    layers, toggleLayer, toggleLayerLock, updateLayer, reparentLayer,
     palette,
   } = useComposeState()
 
@@ -377,10 +401,12 @@ export function LayerStackBody() {
     setDraggedId(id)
   }
 
-  const onDragOver = (e, targetId) => {
+  const onDragOver = (e, targetId, targetParentId = null) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    if (!draggedId || draggedId === targetId) {
+    /* No indicator on self, or when dragging a container over its own
+     * children (reparentLayer rejects cycles — don't promise the drop). */
+    if (!draggedId || draggedId === targetId || draggedId === targetParentId) {
       setDropTargetId(null)
       setDropPosition(null)
       return
@@ -395,21 +421,27 @@ export function LayerStackBody() {
     setDropTargetId((cur) => (cur === targetId ? null : cur))
   }
 
-  const onDrop = (e, targetId) => {
+  /* One drop path for every row: reparentLayer handles same-container
+   * reorder, child → top level, and top level → container alike. Index is
+   * in the target container's order WITHOUT the dragged item (its API).
+   * The panel renders reversed, so visual 'above' = one past the target. */
+  const onDrop = (e, targetId, targetParentId = null) => {
     e.preventDefault()
-    if (!draggedId || draggedId === targetId) {
+    if (!draggedId || draggedId === targetId || draggedId === targetParentId) {
       clearDrag()
       return
     }
-    const fromIndex   = layers.findIndex((l) => l.id === draggedId)
-    const targetIndex = layers.findIndex((l) => l.id === targetId)
-    if (fromIndex < 0 || targetIndex < 0) {
+    const container = targetParentId
+      ? (findLayerDeep(layers, targetParentId)?.children ?? [])
+      : layers
+    const list = container.filter((l) => l.id !== draggedId)
+    const targetIndex = list.findIndex((l) => l.id === targetId)
+    if (targetIndex < 0) {
       clearDrag()
       return
     }
-    const targetAfterRemoval = fromIndex < targetIndex ? targetIndex - 1 : targetIndex
-    const finalIndex = dropPosition === 'above' ? targetAfterRemoval + 1 : targetAfterRemoval
-    moveLayer(draggedId, finalIndex)
+    const finalIndex = dropPosition === 'above' ? targetIndex + 1 : targetIndex
+    reparentLayer(draggedId, targetParentId, finalIndex)
     clearDrag()
   }
 
@@ -421,12 +453,11 @@ export function LayerStackBody() {
 
   const onDragEnd = clearDrag
 
-  const onDeleteSelected = deleteSelected
-  const hasLayerSelection = selectedIds.some((id) => id !== 'canvas')
-
   return (
     <div className="kol-compose-rail min-h-[240px]" data-layer-stack="true">
-      <ul className="flex flex-col pb-3 px-4 pt-3">
+      {/* Figma frame model: Canvas is the container, every layer nests one
+        * 16px step inside it; group/bool children one more. */}
+      <ul className="flex flex-col pb-3 px-2 pt-3">
         <li>
           <CanvasRow
             active={selectedIds.includes('canvas')}
@@ -435,11 +466,17 @@ export function LayerStackBody() {
             onSelect={selectCanvas}
           />
         </li>
+        {layers.length === 0 && (
+          <li className="kol-helper-10 text-subtle px-2 py-2 kol-compose-layer-nest">
+            Add a layer with + or the Generative menu.
+          </li>
+        )}
         {!canvasCollapsed && [...layers].reverse().map((layer) => (
           <li key={layer.id} className="kol-compose-layer-nest">
             <LayerRow
               layer={layer}
               active={selectedIds.includes(layer.id)}
+              tinted={selectedIds.includes('canvas')}
               palette={palette}
               groupCollapsed={collapsedGroups.has(layer.id)}
               onToggleGroup={() => toggleGroupCollapse(layer.id)}
@@ -457,15 +494,25 @@ export function LayerStackBody() {
               onDrop={onDrop}
               onDragEnd={onDragEnd}
             />
-            {layer.type === 'group' && !collapsedGroups.has(layer.id) && Array.isArray(layer.children) && layer.children.length > 0 && (
+            {(layer.type === 'group' || layer.type === 'bool') && !collapsedGroups.has(layer.id) && Array.isArray(layer.children) && layer.children.length > 0 && (
               <ul className="flex flex-col kol-compose-layer-nest">
                 {[...layer.children].reverse().map((child) => (
                   <li key={child.id}>
                     <ChildRow
                       layer={child}
-                      active={selectedIds.includes(child.id) || selectedIds.includes(layer.id)}
+                      active={selectedIds.includes(child.id)}
+                      tinted={selectedIds.includes(layer.id)}
+                      parentId={layer.id}
                       onSelect={() => select(child.id)}
                       onShiftSelect={() => toggleSelection(child.id)}
+                      draggedId={draggedId}
+                      dropTargetId={dropTargetId}
+                      dropPosition={dropPosition}
+                      onDragStart={onDragStart}
+                      onDragOver={onDragOver}
+                      onDragLeave={onDragLeave}
+                      onDrop={onDrop}
+                      onDragEnd={onDragEnd}
                     />
                   </li>
                 ))}
@@ -475,8 +522,10 @@ export function LayerStackBody() {
         ))}
       </ul>
 
-      <div className="mt-auto flex items-center gap-2 px-3 h-10 border-t border-fg-08">
-        {layerSelectionCount >= 2 && (
+      {/* Footer only exists while a multi-selection can be grouped — add
+        * lives in the tab row (LayersAssetsPanel), delete is Del/Backspace. */}
+      {layerSelectionCount >= 2 && (
+        <div className="mt-auto flex items-center gap-2 px-3 h-10 border-t border-fg-08">
           <EditorButton
             variant="primary"
             size="sm"
@@ -487,24 +536,8 @@ export function LayerStackBody() {
           >
             Group {layerSelectionCount}
           </EditorButton>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <AddLayerButton addLayer={addLayer} />
-          <EditorButton
-            variant="primary"
-            size="sm"
-            animateIcon
-            quiet
-            iconOnly="trash"
-            iconSize={12}
-            aria-label="Delete selected"
-            title="Delete selected"
-            disabled={!hasLayerSelection}
-            onClick={onDeleteSelected}
-            style={{ padding: 6 }}
-          />
         </div>
-      </div>
+      )}
     </div>
   )
 }
