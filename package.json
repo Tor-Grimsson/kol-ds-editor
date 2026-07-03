@@ -1,12 +1,36 @@
 {
-  "name": "kol-design-editor",
-  "private": true,
+  "name": "@kolkrabbi/design-editor",
+  "private": false,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
+  "files": ["dist"],
+  "main": "./dist/design-editor.js",
+  "module": "./dist/design-editor.js",
+  "exports": {
+    ".": {
+      "import": "./dist/design-editor.js"
+    },
+    "./style.css": "./dist/design-editor.css"
+  },
+  "sideEffects": ["**/*.css"],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:lib": "vite build --config vite.lib.config.js",
     "preview": "vite preview"
+  },
+  "peerDependencies": {
+    "@kolkrabbi/kol-component": "^0.1.1",
+    "@kolkrabbi/kol-framework": "^0.1.1",
+    "@kolkrabbi/kol-loader": "^0.2.0",
+    "@kolkrabbi/kol-theme": "^0.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.0.0"
   },
   "dependencies": {
     "@kolkrabbi/kol-component": "^0.1.1",

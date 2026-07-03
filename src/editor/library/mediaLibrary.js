@@ -16,13 +16,20 @@
 const ADMIN_BASE = 'https://admin.kolkrabbi.io'
 const PUBLIC_BASE = 'https://media.kolkrabbi.io'
 
+/* Same-origin proxy path media is rewritten to (avoids CORS canvas taint).
+ * Default `/media/` = the Vite dev/preview rewrite and the standalone app's
+ * host rewrite. Library consumers set this via <DesignEditor mediaProxyBase>
+ * to whatever path their host proxies to the CDN. */
+let PROXY_BASE = '/media/'
+export const setMediaProxyBase = (base) => { PROXY_BASE = base }
+
 export const mediaUrl = (key) => `${PUBLIC_BASE}/${key}`
 export const isImageType = (ct) => !!ct && ct.startsWith('image/')
 export const isVideoType = (ct) => !!ct && ct.startsWith('video/')
 
-/* Rewrite a public CDN URL to the same-origin /media proxy path. Non-CDN
+/* Rewrite a public CDN URL to the same-origin proxy path. Non-CDN
  * URLs (data:, blob:, already-proxied) pass through untouched. */
-export const proxied = (url) => url.replace(/^https:\/\/media\.kolkrabbi\.io\//, '/media/')
+export const proxied = (url) => url.replace(/^https:\/\/media\.kolkrabbi\.io\//, PROXY_BASE)
 
 /* List bucket objects, optionally under a folder prefix. Throws on a non-OK
  * response so callers can show an error. */
