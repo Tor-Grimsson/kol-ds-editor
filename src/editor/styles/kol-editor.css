@@ -80,7 +80,10 @@
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  background-color: #0E0E11;
+  /* Themed surface so the infinite backdrop flips with light/dark. CanvasArea
+   * paints its own resolved infinite color on top (default = this same token);
+   * this shows through when the infinite fill is set to None. */
+  background-color: var(--kol-surface-secondary);
 }
 
 /* When a non-select tool is active on the canvas stage, layers inside

@@ -566,13 +566,13 @@ function CanvasRuler({ containerRef, view, disabled = false }) {
   const hTicks = ticksFor(geom.left, geom.pxPer, geom.cw, step)
   const vTicks = ticksFor(geom.top,  geom.pxPer, geom.ch, step)
 
-  /* Light ruler variant — light bar, dark ticks/labels. */
-  /* Mid-grey bar trial (review) — dark ink at higher mixes so ticks and
-   * labels stay legible on #666. */
-  const tickColor   = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 70%, transparent)'
-  const textColor   = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 88%, transparent)'
-  const barBg       = '#666666'
-  const borderColor = 'color-mix(in srgb, var(--kol-bg-0, #0E0E11) 35%, transparent)'
+  /* Ruler chrome rides the themed fg ramp so it flips with light/dark: an 8%
+   * bar (bg-fg-08) with fg ticks/labels, all naturally contrast-correct in
+   * both themes — no hardcoded greys. */
+  const tickColor   = 'var(--kol-fg-48)'
+  const textColor   = 'var(--kol-fg-64)'
+  const barBg       = 'var(--kol-fg-08)'
+  const borderColor = 'var(--kol-fg-16)'
   const labelStyle  = { fontFamily: 'var(--kol-font-family-mono)', fontSize: 9 }
 
   return (

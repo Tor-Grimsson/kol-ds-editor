@@ -19,15 +19,20 @@ export const PALETTE_REFS = [
  * grid. Extracted from LayerInspector so both it and the schema-driven
  * AutoControls can consume it without an import cycle.
  */
-export function ColorField({ value, onChange, palette, label = 'Color', hideLabel = false }) {
+export function ColorField({ value, onChange, palette, label = 'Color', hideLabel = false, autoValue = null }) {
   const isPaletteRef = typeof value === 'string' && value.startsWith('palette:')
   const isNone       = value == null
+  /* A `var(--kol-*)` value is a themed token that flips with light/dark — the
+   * swatch renders it live, but there's no meaningful hex to show. */
+  const isVar        = typeof value === 'string' && value.startsWith('var(')
   const resolved     = resolveColor(value, palette) ?? '#FFFFFF'
   const subtitle     = isNone
     ? 'None'
-    : isPaletteRef
-      ? (PALETTE_REFS.find((r) => r.value === value)?.label ?? value)
-      : resolved.toUpperCase()
+    : isVar
+      ? 'Theme'
+      : isPaletteRef
+        ? (PALETTE_REFS.find((r) => r.value === value)?.label ?? value)
+        : resolved.toUpperCase()
   const isStroke     = label === 'Stroke'
 
   const [open, setOpen] = useState(false)
@@ -51,8 +56,9 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
             hoverable={false}
           />
         </button>
-        {/* None shows an empty field ('# –' via placeholder), not the resolved
-            fallback hex — a disabled fill claiming #FFFFFF reads as white. */}
+        {/* None / themed show an empty field ('# –' via placeholder), not a
+            hex — a disabled fill claiming #FFFFFF reads as white, and a themed
+            token has no single hex. */}
         <Input
           variant="ghost"
           size="sm"
@@ -60,7 +66,7 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
           chars={6}
           uppercase
           placeholder="–"
-          value={isNone ? '' : resolved.replace(/^#/, '').toUpperCase()}
+          value={(isNone || isVar) ? '' : resolved.replace(/^#/, '').toUpperCase()}
           onChange={(e) => onChange('#' + e.target.value.replace(/^#/, '').toUpperCase())}
         />
       </div>
@@ -82,6 +88,30 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
               onClick={() => { onChange(ref.value); setOpen(false) }}
             />
           ))}
+        </div>
+        {/* Quick states: Theme (auto, flips with light/dark — only offered when
+            the field has an autoValue) and None (disable → transparent). */}
+        <div className="flex items-center gap-2">
+          {autoValue && (
+            <button
+              type="button"
+              onClick={() => { onChange(autoValue); setOpen(false) }}
+              aria-pressed={isVar}
+              className="flex items-center gap-1.5 kol-helper-12 text-fg-64 rounded px-1.5 h-6 border border-fg-08"
+            >
+              <ColorSwatch hex={resolveColor(autoValue, palette) ?? autoValue} size={14} hoverable={false} />
+              Theme
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => { onChange(null); setOpen(false) }}
+            aria-pressed={isNone}
+            className="flex items-center gap-1.5 kol-helper-12 text-fg-64 rounded px-1.5 h-6 border border-fg-08"
+          >
+            <ColorSwatch hex="#FFFFFF" size={14} showTransparent transparentTone={isStroke ? 'error' : 'warning'} hoverable={false} />
+            None
+          </button>
         </div>
       </PopoverPanel>
     </LabeledControl>

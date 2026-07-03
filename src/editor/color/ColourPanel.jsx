@@ -74,7 +74,11 @@ function TopRow({ mode, setMode, target }) {
   const onClear = () => target.onChange(null)
   const onPickEyedrop = async () => {
     try {
-      const canvasFillHex = resolveColor(canvasFill, palette) ?? null
+      /* A themed `var(...)` fill can't be a 2D-context fillStyle — skip it so
+       * the eyedropper samples the layers over transparent instead of black. */
+      const canvasFillHex = (typeof canvasFill === 'string' && canvasFill.startsWith('var('))
+        ? null
+        : (resolveColor(canvasFill, palette) ?? null)
       const hex = await pickFromCanvas({ layers, palette, aspect, customRatio, canvasFillHex })
       if (hex) target.onChange(hex)
     } catch (err) {

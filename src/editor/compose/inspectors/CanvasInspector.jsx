@@ -22,6 +22,7 @@ export default function CanvasInspector() {
     showGrid, toggleGrid,
     canvasFill, setCanvasFill,
     canvasFillOpacity, setCanvasFillOpacity,
+    infiniteFill, setInfiniteFill,
     palette,
   } = useComposeState()
 
@@ -73,6 +74,7 @@ export default function CanvasInspector() {
         value={canvasFill}
         onChange={setCanvasFill}
         palette={palette}
+        autoValue="var(--kol-surface-absolute-split)"
       />
       <LabeledControl label="Fill opacity">
         <Slider
@@ -82,6 +84,14 @@ export default function CanvasInspector() {
           onChange={(v) => setCanvasFillOpacity(v / 100)}
         />
       </LabeledControl>
+
+      <ColorField
+        label="Infinite"
+        value={infiniteFill}
+        onChange={setInfiniteFill}
+        palette={palette}
+        autoValue="var(--kol-surface-secondary)"
+      />
     </div>
   )
 }

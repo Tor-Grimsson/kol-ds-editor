@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "main": "./dist/design-editor.js",
   "module": "./dist/design-editor.js",
   "exports": {
@@ -13,7 +15,9 @@
     },
     "./style.css": "./dist/design-editor.css"
   },
-  "sideEffects": ["**/*.css"],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "publishConfig": {
     "access": "public"
   },
@@ -33,8 +37,8 @@
     "react-router-dom": "^7.0.0"
   },
   "dependencies": {
-    "@kolkrabbi/kol-component": "^0.1.1",
-    "@kolkrabbi/kol-framework": "^0.1.1",
+    "@kolkrabbi/kol-component": "^0.1.2",
+    "@kolkrabbi/kol-framework": "^0.1.2",
     "@kolkrabbi/kol-loader": "^0.2.0",
     "@kolkrabbi/kol-theme": "^0.1.1",
     "@tailwindcss/vite": "^4.2.4",

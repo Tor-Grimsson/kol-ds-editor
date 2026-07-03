@@ -366,7 +366,7 @@ export function ComposeStateProvider({ children }) {
   }, [])
 
   /* ─── Frame: grid backdrop ─── */
-  const [showGrid, setShowGrid] = useState(true)
+  const [showGrid, setShowGrid] = useState(false)
   const toggleGrid = useCallback(() => setShowGrid((g) => !g), [])
   const [showRulers, setShowRulers] = useState(true)
   const toggleRulers = useCallback(() => setShowRulers((r) => !r), [])
@@ -388,8 +388,15 @@ export function ComposeStateProvider({ children }) {
    * The canvas itself acts as the bottom-most "layer" — selectable in the
    * stack, owns its own fill + opacity. Replaces the former `background`
    * layer type. */
-  const [canvasFill,        setCanvasFill]        = useState(null)   /* hex string or null = transparent */
+  /* Fill values: hex / palette-ref = explicit; `null` = None (transparent —
+   * the "disable" state); a `var(--kol-*)` token = themed auto that flips
+   * with light/dark. The frame defaults to the absolute black/white pair
+   * (white in light mode, black in dark). */
+  const [canvasFill,        setCanvasFill]        = useState('var(--kol-surface-absolute-split)')
   const [canvasFillOpacity, setCanvasFillOpacity] = useState(1)      /* 0..1 */
+  /* Infinite backdrop (the area around the frame). Themed surface token by
+   * default so it flips with the theme; overridable via the inspector swatch. */
+  const [infiniteFill,      setInfiniteFill]      = useState('var(--kol-surface-secondary)')
 
   /* ─── Active paint + app-level paint pair ───
    * Photoshop / Affinity model. SwatchStack reads `paintFill` / `paintStroke`
@@ -566,7 +573,10 @@ export function ComposeStateProvider({ children }) {
   useEffect(() => {
     if (!selectedId) return
     if (selectedId === 'canvas') {
-      if (canvasFillForSyncRef.current !== undefined) setPaintFill(canvasFillForSyncRef.current ?? null)
+      const cf = canvasFillForSyncRef.current
+      /* A themed `var(...)` fill isn't a concrete color the picker can show —
+       * treat it like None for the swatch. */
+      setPaintFill(typeof cf === 'string' && cf.startsWith('var(') ? null : (cf ?? null))
       return
     }
     const layer = findLayerDeep(layersForSyncRef.current, selectedId)
@@ -1294,6 +1304,7 @@ export function ComposeStateProvider({ children }) {
         if (draft.guides && Array.isArray(draft.guides.h) && Array.isArray(draft.guides.v)) setGuides(draft.guides)
         if (draft.canvas) {
           if (draft.canvas.fill !== undefined)        setCanvasFill(draft.canvas.fill)
+          if (draft.canvas.infiniteFill !== undefined) setInfiniteFill(draft.canvas.infiniteFill)
           if (typeof draft.canvas.fillOpacity === 'number') setCanvasFillOpacity(draft.canvas.fillOpacity)
         }
         if (draft.palette) {
@@ -1330,7 +1341,7 @@ export function ComposeStateProvider({ children }) {
           aspect,
           canvasW, canvasH, showGrid, showRulers, guides,
           layers,
-          canvas:  { fill: canvasFill, fillOpacity: canvasFillOpacity },
+          canvas:  { fill: canvasFill, fillOpacity: canvasFillOpacity, infiniteFill },
           palette: { poolId, modeId, colors, locks },
           paint:   { fill: paintFill, stroke: paintStroke, active: activePaint },
         }
@@ -1338,7 +1349,7 @@ export function ComposeStateProvider({ children }) {
       } catch { /* quota / disabled storage: ignore */ }
     }, 500)
     return () => clearTimeout(t)
-  }, [layers, aspect, canvasW, canvasH, showGrid, showRulers, guides, canvasFill, canvasFillOpacity, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
+  }, [layers, aspect, canvasW, canvasH, showGrid, showRulers, guides, canvasFill, canvasFillOpacity, infiniteFill, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
 
   /* Move a layer so it ends up at array position `toIndex` post-move. */
   const moveLayer = useCallback((id, toIndex) => {
@@ -1372,9 +1383,10 @@ export function ComposeStateProvider({ children }) {
     guides, setGuides,
     view, setView,
 
-    /* canvas fill (bottom-most "layer") */
+    /* canvas fill (bottom-most "layer") + infinite backdrop */
     canvasFill, setCanvasFill,
     canvasFillOpacity, setCanvasFillOpacity,
+    infiniteFill, setInfiniteFill,
 
     /* active paint (fill / stroke pair) + app-level paint colors */
     activePaint, setActivePaint,

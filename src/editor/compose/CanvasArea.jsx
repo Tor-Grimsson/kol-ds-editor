@@ -66,7 +66,7 @@ export default function CanvasArea() {
   const {
     aspect, view, layers, palette,
     canvasRatio, showGrid,
-    canvasFill, canvasFillOpacity,
+    canvasFill, canvasFillOpacity, infiniteFill,
     selectedId, selectedIds, select, toggleSelection, selectMany,
     addLayer,
     updateLayer, removeLayer, deleteSelected, duplicateLayer, toggleLayer, toggleLayerLock,
@@ -111,6 +111,12 @@ export default function CanvasArea() {
   const bgColor      = fillHex
     ? (canvasFillOpacity < 1 ? hexWithAlpha(fillHex, canvasFillOpacity) : fillHex)
     : null
+
+  /* Infinite backdrop (area around the frame). `null` = None → transparent,
+   * letting the themed `.kol-editor-canvas` surface show through; a var/hex
+   * paints it directly. Rendered on the outer wrapper below so it fills the
+   * whole stage behind the grid + frame. */
+  const infiniteColor = infiniteFill == null ? 'transparent' : (resolveColor(infiniteFill, palette) ?? 'transparent')
 
   const visibleLayers = layers
 
@@ -1044,7 +1050,7 @@ export default function CanvasArea() {
   return (
     <div
       className="relative w-full h-full"
-      style={{ cursor: wrapperCursor }}
+      style={{ cursor: wrapperCursor, background: infiniteColor }}
       /* Zoom tool — click zooms in at the pointer, Alt+click zooms out.
        * Lives on the wrapper so the dark backdrop zooms too; the viewport
        * (PanZoomViewport) applies it via the kol:zoom-at event. */
