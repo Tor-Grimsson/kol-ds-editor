@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/media/:path*", "destination": "https://media.kolkrabbi.io/:path*" }
+  ]
+}
