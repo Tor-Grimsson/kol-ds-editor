@@ -6,6 +6,8 @@ generators, kinetic type, boolean geometry, image export).
 
 Consumes the published `@kolkrabbi/kol-*` design system as peer dependencies.
 
+**Live:** [editor.kolkrabbi.io](https://editor.kolkrabbi.io)
+
 ## Install
 
 ```sh

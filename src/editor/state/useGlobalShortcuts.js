@@ -14,10 +14,10 @@ import { useComposeState } from '../compose/state'
  * Inputs and contentEditable elements are skipped so typing doesn't trigger
  * shortcuts (matches the local CanvasArea dispatcher's behavior).
  */
-const GLOBAL_IDS = new Set(['undo', 'redo', 'redo-alt', 'deselect'])
+const GLOBAL_IDS = new Set(['undo', 'redo', 'redo-alt', 'deselect', 'toggle-grid'])
 
 export function useGlobalShortcuts() {
-  const { undo, redo, canUndo, canRedo, select } = useComposeState()
+  const { undo, redo, canUndo, canRedo, select, toggleGrid } = useComposeState()
 
   useEffect(() => {
     const onKey = (e) => {
@@ -33,10 +33,11 @@ export function useGlobalShortcuts() {
         case 'redo':
         case 'redo-alt':   if (canRedo) { e.preventDefault(); redo() }; return
         case 'deselect':   e.preventDefault(); select(null); return
+        case 'toggle-grid': e.preventDefault(); toggleGrid(); return
         default:           return
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [undo, redo, canUndo, canRedo, select])
+  }, [undo, redo, canUndo, canRedo, select, toggleGrid])
 }

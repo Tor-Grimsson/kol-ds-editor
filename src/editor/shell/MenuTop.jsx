@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { MenuItem, MenuDropdownItem, MenuDropdownDivider, MenuDropdownNest } from '@kolkrabbi/kol-component'
 import { Input, useModal } from '@kolkrabbi/kol-component'
 import EditorIcon from '../icons/EditorIcon'
+import { useThemeMode } from '../theme'
 import { ASPECTS } from './aspects'
 import { useComposeState } from '../compose/state'
 import { useGeneratorLibrary } from '../library/LibraryProvider'
@@ -45,9 +46,11 @@ export default function MenuTop() {
     currentPresetId, currentPresetName, setCurrentPresetName,
     loadPreset, loadPalette, insertFromLibrary,
     snapEnabled, toggleSnap,
+    showGrid, toggleGrid,
   } = useComposeState()
   const { library } = useGeneratorLibrary()
   const modal = useModal()
+  const [themeMode, setThemeMode] = useThemeMode()
 
   const openColorModal = () => window.dispatchEvent(new CustomEvent('kol:open-color-modal'))
 
@@ -338,6 +341,33 @@ export default function MenuTop() {
               >
                 Social
               </MenuDropdownItem>
+            </MenuDropdownNest>
+          </div>
+        </MenuItem>
+
+        <MenuItem label="Settings" panelClassName="z-[1000]">
+          <div className="py-1 w-[220px]">
+            <MenuDropdownItem
+              onClick={toggleGrid}
+              shortcut={showGrid ? <EditorIcon name="check" size={11} /> : undefined}
+            >
+              Show grid
+            </MenuDropdownItem>
+            <MenuDropdownDivider />
+            <MenuDropdownNest label="Theme">
+              {[
+                { value: 'light',  label: 'Light'  },
+                { value: 'dark',   label: 'Dark'   },
+                { value: 'system', label: 'System' },
+              ].map((opt) => (
+                <MenuDropdownItem
+                  key={opt.value}
+                  onClick={() => setThemeMode(opt.value)}
+                  shortcut={themeMode === opt.value ? <EditorIcon name="check" size={11} /> : undefined}
+                >
+                  {opt.label}
+                </MenuDropdownItem>
+              ))}
             </MenuDropdownNest>
           </div>
         </MenuItem>

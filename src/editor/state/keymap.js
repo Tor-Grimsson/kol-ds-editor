@@ -49,6 +49,9 @@ export const SHORTCUTS = [
   { id: 'tool-ellipse', combo: 'O', label: 'Ellipse tool',      section: 'Tools' },
   { id: 'tool-zoom',    combo: 'Z', label: 'Zoom tool',         section: 'Tools' },
 
+  /* View */
+  { id: 'toggle-grid',  combo: 'G', label: 'Show/hide grid',    section: 'View' },
+
   /* Color */
   { id: 'paint-default', combo: 'D',       label: 'Default fill + stroke (white / black)', section: 'Color' },
   { id: 'paint-toggle',  combo: 'X',       label: 'Toggle fill / stroke focus',            section: 'Color' },
