@@ -1,7 +1,7 @@
 import { Dropdown, LabeledControl } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../state'
 import { groupById, presetsInGroup, presetParams } from '../../../loops/registry'
-import { PICKER_TREE } from '../../../loops/taxonomy'
+import { PICKER_TREE, LEGACY_GROUP_LABELS } from '../../../loops/taxonomy'
 
 /**
  * LoopPicker — the app hierarchy (METHOD > TYPE > CATEGORY > PRESET, see
@@ -18,11 +18,16 @@ import { PICKER_TREE } from '../../../loops/taxonomy'
  * Picking at any level resets the loop's params to the target preset's
  * full set (labs semantic — a preset is a curated starting point, not a
  * patch); type/group/category hops land on their first preset.
+ *
+ * `tree` defaults to the Generative types; the misc layer passes MISC_TREE.
+ * A layer whose group lives OUTSIDE the tree (legacy optic/paratype loop
+ * layers) shows its identity read-only instead — those groups are not
+ * pickable generative types (optic → EFFECTS > Pattern, paratype → misc).
  */
-export function LoopPicker({ layer }) {
+export function LoopPicker({ layer, tree = PICKER_TREE }) {
   const { updateLayer } = useComposeState()
   const group = layer.loopGroup ?? 'shape'
-  const parent = PICKER_TREE.find((t) => t.groups.includes(group)) ?? PICKER_TREE[0]
+  const parent = tree.find((t) => t.groups.includes(group)) ?? null
   const presets = presetsInGroup(group)
   const current = presets.find((p) => p.id === layer.presetId)
   const subs = [...new Set(presets.map((p) => p.sub).filter(Boolean))]
@@ -40,7 +45,7 @@ export function LoopPicker({ layer }) {
     })
   }
   const onParent = (label) => {
-    const t = PICKER_TREE.find((x) => x.label === label)
+    const t = tree.find((x) => x.label === label)
     if (t) applyPreset(presetsInGroup(t.groups[0])[0], t.groups[0])
   }
   const onGroup = (g) => applyPreset(presetsInGroup(g)[0], g)
@@ -48,24 +53,32 @@ export function LoopPicker({ layer }) {
 
   return (
     <>
-      <LabeledControl label="Type">
-        <div className="flex flex-col gap-1">
-          <Dropdown
-            variant="subtle" size="sm" className="w-full"
-            options={PICKER_TREE.map((t) => ({ value: t.label, label: t.label }))}
-            value={parent.label}
-            onChange={onParent}
-          />
-          {parent.groups.length > 1 && (
-            <Dropdown
-              variant="subtle" size="sm" className="w-full"
-              options={parent.groups.map((gid) => ({ value: gid, label: parent.labels?.[gid] ?? groupById(gid).label }))}
-              value={group}
-              onChange={onGroup}
-            />
-          )}
-        </div>
-      </LabeledControl>
+      {tree.length > 1 || !parent ? (
+        <LabeledControl label="Type">
+          <div className="flex flex-col gap-1">
+            {parent ? (
+              <Dropdown
+                variant="subtle" size="sm" className="w-full"
+                options={tree.map((t) => ({ value: t.label, label: t.label }))}
+                value={parent.label}
+                onChange={onParent}
+              />
+            ) : (
+              <span className="kol-helper-12 text-meta px-1">
+                {LEGACY_GROUP_LABELS[group] ?? groupById(group).label}
+              </span>
+            )}
+            {parent && parent.groups.length > 1 && (
+              <Dropdown
+                variant="subtle" size="sm" className="w-full"
+                options={parent.groups.map((gid) => ({ value: gid, label: parent.labels?.[gid] ?? groupById(gid).label }))}
+                value={group}
+                onChange={onGroup}
+              />
+            )}
+          </div>
+        </LabeledControl>
+      ) : null}
       {subs.length > 1 && (
         <LabeledControl label="Category">
           <Dropdown

@@ -15,7 +15,7 @@ import AlignmentPanel   from './AlignmentPanel'
  *   - 1 layer.id              → layer inspector (delegates by type)
  *   - 2+ layer.ids            → multi-select summary + Group action
  *
- * Palette stays in its own persistent PalettePanel. Aspect + view live in
+ * Palette editing left the rail (palette modal). Aspect + view live in
  * the topbar Canvas menu.
  */
 export default function InspectorRail() {

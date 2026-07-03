@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { ComposeContext as Ctx } from './composeContext'
 import { useModal } from '@kolkrabbi/kol-component'
 import { POOLS } from '../modes/palette/pools'
 import { generatePalette } from '../modes/palette/colorMath'
@@ -49,8 +50,6 @@ const DRAFT_KEY = 'kol.editor.draft'
  * (multi-select via shift-click in LayerStack). `selectedId` (singular) is
  * exposed as a getter returning the first id, for single-select consumers.
  */
-
-const Ctx = createContext(null)
 
 const FREE_FLAGS = [false, false, false, false, false, false]
 const poolFor = (id) => POOLS.find((p) => p.id === id) ?? POOLS[0]
@@ -283,6 +282,10 @@ export const LAYER_TYPES = [
   { id: 'text',       label: 'Text' },
   { id: 'loop',       label: 'Loop' },
   { id: 'kinetic',    label: 'Kinetic type' },
+  /* Misc — placeholder home for rule-driven generators that are neither
+   * Generative types nor Effects (para-type now; interfaces later). Rides
+   * the loop render vehicle (loopGroup/presetId/loopId + flat params). */
+  { id: 'misc',       label: 'Misc' },
 ]
 
 const layerDefaults = (type) => {
@@ -303,6 +306,16 @@ const layerDefaults = (type) => {
       const preset = presetById()   /* first preset (Circle morph) */
       return placed(480, 480, {
         loopGroup:   'shape',
+        presetId:    preset.id,
+        presetLabel: preset.label,
+        loopId:      preset.loop,
+        ...presetParams(preset),
+      })
+    }
+    case 'misc': {
+      const preset = presetById('paratype-o')
+      return placed(480, 480, {
+        loopGroup:   'paratype',
         presetId:    preset.id,
         presetLabel: preset.label,
         loopId:      preset.loop,

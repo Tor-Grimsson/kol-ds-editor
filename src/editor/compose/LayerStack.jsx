@@ -30,6 +30,7 @@ const TYPE_ICONS = {
   group:      'layer-group',
   bool:       'layer-group',
   loop:       'layer-loop',
+  misc:       'layer-loop',
   kinetic:    'layer-kinetic',
 }
 

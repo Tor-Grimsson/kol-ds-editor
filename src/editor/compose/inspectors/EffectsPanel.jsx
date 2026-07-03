@@ -58,10 +58,11 @@ function LayerEffects({ layer }) {
   /* Catalog per host: photo gets everything incl. GL engines; other
    * effectable types canvas-only (engine filters need an image source);
    * engine loops can't host effects yet (no GL source path). */
-  const engineLoop = layer.type === 'loop' && loopById(layer.loopId)?.kind === 'engine'
+  const loopLike = layer.type === 'loop' || layer.type === 'misc'
+  const engineLoop = loopLike && loopById(layer.loopId)?.kind === 'engine'
   const effectable = layer.type === 'photo'
     || ['shape', 'text', 'pattern', 'path'].includes(layer.type)
-    || (layer.type === 'loop' && !engineLoop)
+    || (loopLike && !engineLoop)
   const available = layer.type === 'photo' ? FILTERS : FILTERS.filter((f) => f.kind !== 'engine')
   const categories = effectCategories(available)
 

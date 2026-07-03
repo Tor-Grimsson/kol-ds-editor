@@ -20,6 +20,7 @@ import lockupVertRaw  from '../../brand/logos/svg/kol-lockup-vert.svg?raw'
 import { ASPECTS }    from '../shell/aspects'
 import { resolveColor, CANVAS_W } from './state'
 import { familyFor, applyCase } from '../modes/type/cuts'
+import { textLayerFont, textOutlinePaths } from '../modes/type/textOutline'
 import { buildPatternSvg } from '../modes/pattern/render'
 import { getShapeSvg }     from '../modes/pattern/shapes'
 import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
@@ -302,10 +303,36 @@ function boolLayerSvg(layer, palette) {
   return pathLayerSvg({ ...layer, nodes: res.nodes, holes: res.holes, closed: true }, palette)
 }
 
+/* Text layer — REAL vector outlines (one <path> per line) when the cut's
+ * Font is warm: export triggers `await warmTextFonts(layers)` before the
+ * sync build (see useComposeFile.js), textOutline.js does the layout
+ * matching the live TypeBlock render (size / tracking / line-height /
+ * align / case / soft-wrap), fill from the resolved color, centered stroke
+ * via `paint-order="stroke fill"` (the -webkit-text-stroke equivalent).
+ * Falls back to the legacy foreignObject writer when no Font is available:
+ * the `mono` cut (JetBrains Mono ships woff2-only — opentype.js can't
+ * parse it) or a cold cache (sync callers like the eyedropper that never
+ * awaited warmTextFonts). foreignObject only renders in browser consumers. */
 function textLayerSvg(layer, palette) {
   const color       = resolveColor(layer.color, palette) ?? '#FFFFFF'
   const strokeColor = resolveColor(layer.stroke, palette)
   const sw          = layer.strokeWidth ?? 0
+  const font = textLayerFont(layer)
+  if (font) {
+    const paths = textOutlinePaths(layer, font)
+    if (!paths.length) return ''  /* empty text draws nothing */
+    const strokeAttrs = strokeColor && sw > 0
+      ? ` stroke="${strokeColor}" stroke-width="${sw}" paint-order="stroke fill"`
+      : ''
+    return `<g transform="translate(${layer.x.toFixed(2)} ${layer.y.toFixed(2)})" fill="${color}"${strokeAttrs}>${paths.map((d) => `<path d="${d}"/>`).join('')}</g>`
+  }
+  return textLayerForeignObject(layer, color, strokeColor, sw)
+}
+
+/* Legacy foreignObject writer — styled HTML div + live CSS font. Kept
+ * STRICTLY as the fallback (mono cut / un-warmed font cache): it only
+ * renders in browser SVG consumers and never in Illustrator/Inkscape/etc. */
+function textLayerForeignObject(layer, color, strokeColor, sw) {
   const family = `'${familyFor(layer.width ?? 'Tight')}', 'Right Grotesk', sans-serif`
   const weight = layer.weight ?? 600
   const italic = layer.italic ? 'italic' : 'normal'
@@ -403,7 +430,7 @@ export function layerToSvg(layer, palette, w, h, idx, defs) {
    * its own branch inside photoLayerSvg; loops inside loopLayerSvg). wrap()
    * below still applies opacity/blend/rotation — the backing store holds
    * unrotated content. */
-  if (layer.filterId && layer.type !== 'photo' && layer.type !== 'loop' && typeof document !== 'undefined') {
+  if (layer.filterId && layer.type !== 'photo' && layer.type !== 'loop' && layer.type !== 'misc' && typeof document !== 'undefined') {
     const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
     if (live) {
       const body = `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${(layer.x ?? 0).toFixed(2)}" y="${(layer.y ?? 0).toFixed(2)}" width="${(layer.w ?? 0).toFixed(2)}" height="${(layer.h ?? 0).toFixed(2)}"/>`
@@ -424,7 +451,8 @@ export function layerToSvg(layer, palette, w, h, idx, defs) {
     case 'bool':       body = boolLayerSvg(layer, palette); break
     case 'text':       body = textLayerSvg(layer, palette); break
     case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs); break
-    case 'loop':       body = loopLayerSvg(layer); break
+    case 'loop':
+    case 'misc':       body = loopLayerSvg(layer); break
     case 'kinetic':    body = kineticLayerSvg(layer); break
     default: break
   }

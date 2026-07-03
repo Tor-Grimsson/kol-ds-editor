@@ -88,6 +88,7 @@ export default function LayerRenderer({ layer: rawLayer, palette }) {
       return <TextLayer layer={layer} palette={palette} layerStyle={layerStyle} />
     }
     case 'group':      return <GroupLayer      layer={layer} palette={palette} layerStyle={layerStyle} />
+    case 'misc':   /* misc rides the loop render vehicle */
     case 'loop': {
       const def = loopById(layer.loopId)
       if (def?.kind === 'engine') return <EngineLoopLayer layer={layer} def={def} layerStyle={layerStyle} />
@@ -112,6 +113,20 @@ function KineticLayer({ layer, layerStyle }) {
   const rig = useRef(null)          /* { engine, w, h, comp } */
   const tctx = useTransportCtx(true)
 
+  /* morphBlend bridge — the kinetic layer's one FLAT bindable prop. When
+   * present (a knob write, or a binding already resolved to a number by
+   * resolveLayer above), it overrides `morph.blend` on every morph-on
+   * instance before the comp reaches the engine — so BindDot sources drive
+   * the morph without touching the stored comp. Absent prop = stored comp
+   * untouched (identity passthrough). */
+  const comp = useMemo(() => {
+    const c = layer.comp
+    const blend = layer.morphBlend
+    if (typeof blend !== 'number' || !c?.instances?.some((x) => x?.morph?.on)) return c
+    const b = Math.max(0, Math.min(1, blend))
+    return { ...c, instances: c.instances.map((x) => (x.morph?.on ? { ...x, morph: { ...x.morph, blend: b } } : x)) }
+  }, [layer.comp, layer.morphBlend])
+
   useEffect(() => {
     if (!hostRef.current) return undefined
     loadKineticFonts()              /* idempotent FontFace registration */
@@ -130,7 +145,7 @@ function KineticLayer({ layer, layerStyle }) {
     const w = Math.max(1, Math.round(layer.w ?? 1))
     const h = Math.max(1, Math.round(layer.h ?? 1))
     if (w !== r.w || h !== r.h) { r.engine.resize(w, h); r.w = w; r.h = h }
-    if (r.comp !== layer.comp) { r.engine.setComposition(layer.comp); r.comp = layer.comp }
+    if (r.comp !== comp) { r.engine.setComposition(comp); r.comp = comp }
     r.engine.renderAt(tctx.t)
   })
 
@@ -172,7 +187,7 @@ function EffectedLayer({ layer, filter, palette, layerStyle }) {
   const srcRef = useRef(null)       /* { key, canvas } (svg) | { canvas } (loop) */
   const lastDraw = useRef(null)
   const [, forceDraw] = useState(0)
-  const isLoop = layer.type === 'loop'
+  const isLoop = layer.type === 'loop' || layer.type === 'misc'
   const tctx = useTransportCtx(isLoop || filter.animated !== false)
 
   useEffect(() => {

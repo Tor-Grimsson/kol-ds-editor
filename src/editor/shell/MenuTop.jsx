@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
 import { MenuItem, MenuDropdownItem, MenuDropdownDivider, MenuDropdownNest } from '@kolkrabbi/kol-component'
 import { Input, useModal } from '@kolkrabbi/kol-component'
 import EditorIcon from '../icons/EditorIcon'
@@ -7,33 +6,30 @@ import { ASPECTS } from './aspects'
 import { useComposeState } from '../compose/state'
 import { useGeneratorLibrary } from '../library/LibraryProvider'
 import { STARTERS } from '../library/starters'
-import { usePatternState } from '../modes/pattern/state'
-import { useTypeState } from '../modes/type/state'
-import { getFeatures } from '../registry/features'
 import { useComposeFile } from '../compose/useComposeFile'
 import { findLayerDeep } from '../compose/helpers'
 import { isBooleanable } from '../compose/boolean-ops'
 import { FILTERS } from '../../filters'
 import { schemaDefaults } from '../params/schema'
 import { loopById, groupById, presetsInGroup, presetsInSub, presetParams } from '../../loops/registry'
-import { GENERATIVE_TREE, TYPE_LAB_TREE } from '../../loops/taxonomy'
+import { GENERATIVE_TREE } from '../../loops/taxonomy'
 import { effectCategories } from '../compose/inspectors/effectCategories'
 
 /**
  * MenuTop — top bar above the editor grid.
  *
- *   [ Frame title ]   [ Mode ▼ ]  [ File ▼ ]  [ Canvas ▼ ]  [ Templates ▼ ]
+ *   [ Frame title ]   [ Tools ▼ ]  [ File ▼ ]  [ Canvas ▼ ]  [ Templates ▼ ]
  *
- * The top-level entries (Mode / File / Canvas / Templates) are MenuItems;
+ * The top-level entries (Tools / File / Canvas / Templates) are MenuItems;
  * each opens a dropdown panel of MenuDropdownItems.
  */
 const ASPECT_OPTIONS = ASPECTS.map((a) => ({ value: a.id, label: a.label }))
 
 const SLOT_META = {
-  palette: { label: 'Palettes', target: 'palette' },
-  pattern: { label: 'Patterns', target: 'pattern' },
-  type:    { label: 'Types',    target: 'type'    },
-  preset:  { label: 'Presets',  target: 'compose' },
+  palette: { label: 'Palettes' },
+  pattern: { label: 'Patterns' },
+  type:    { label: 'Types'    },
+  preset:  { label: 'Presets'  },
 }
 
 const SLOT_KEYS = ['palette', 'pattern', 'type', 'preset']
@@ -47,18 +43,13 @@ export default function MenuTop() {
     canUndo, canRedo, undo, redo,
     clearLayers,
     currentPresetId, currentPresetName, setCurrentPresetName,
-    loadPreset, loadPalette,
+    loadPreset, loadPalette, insertFromLibrary,
     snapEnabled, toggleSnap,
   } = useComposeState()
   const { library } = useGeneratorLibrary()
-  const { loadPattern } = usePatternState()
-  const { loadType }    = useTypeState()
-  const navigate = useNavigate()
-  const { mode: currentMode } = useParams()
   const modal = useModal()
-  /* Mode menu from the feature registry — computed at render so registration
-   * (Editor's side-effect import) has already run. */
-  const modes = getFeatures().filter((f) => f.nav !== false)
+
+  const openColorModal = () => window.dispatchEvent(new CustomEvent('kol:open-color-modal'))
 
   /* Save / save-as / export shared with the rail EditorFooter. */
   const { onSave, onSaveAs, onExportSvg, onExportPng } = useComposeFile()
@@ -76,7 +67,7 @@ export default function MenuTop() {
    * engine (GL) loops can't host effects yet (no GL source path). */
   const fxLayer = selectedId && selectedId !== 'canvas' ? findLayerDeep(layers, selectedId) : null
   const fxEngineLoop = fxLayer?.type === 'loop' && loopById(fxLayer.loopId)?.kind === 'engine'
-  const fxTarget = fxLayer && !fxEngineLoop && ['shape', 'text', 'pattern', 'path', 'loop', 'photo'].includes(fxLayer.type) ? fxLayer : null
+  const fxTarget = fxLayer && !fxEngineLoop && ['shape', 'text', 'pattern', 'path', 'loop', 'misc', 'photo'].includes(fxLayer.type) ? fxLayer : null
   const fxOptions = fxTarget
     ? FILTERS.filter((f) => fxTarget.type === 'photo' || f.kind !== 'engine')
     : []
@@ -101,7 +92,6 @@ export default function MenuTop() {
       loopId:      preset.loop,
       ...presetParams(preset),
     })
-    if (currentMode !== 'compose') navigate('/editor/compose')
   }
   /* Presets of one registry group, in file order with sub-bucket headers. */
   const generativeItems = (groupId) => {
@@ -149,22 +139,24 @@ export default function MenuTop() {
     return modal.confirm('Discard the current canvas? Unsaved changes will be lost.')
   }
 
+  /* Open a library item in place: palettes load into the live palette and
+   * surface the color modal; pattern / type items insert a layer carrying
+   * the saved settings (insertFromLibrary owns the spec→layer mapping);
+   * presets replace the canvas. */
   const onOpenItem = async (slot, item) => {
     if (slot === 'preset' && !(await confirmReplaceIfUnsaved())) return
     switch (slot) {
-      case 'palette': loadPalette(item); break
-      case 'pattern': loadPattern(item); break
-      case 'type':    loadType(item);    break
-      case 'preset':  loadPreset(item);  break
-      default: return
+      case 'palette': loadPalette(item); openColorModal();      break
+      case 'pattern': insertFromLibrary('pattern', item);       break
+      case 'type':    insertFromLibrary('type', item);          break
+      case 'preset':  loadPreset(item);                         break
+      default:
     }
-    navigate(`/editor/${SLOT_META[slot].target}`)
   }
 
   const onOpenStarter = async (s) => {
     if (!(await confirmReplaceIfUnsaved())) return
     loadPreset(s.preset)
-    navigate('/editor/compose')
   }
 
   return (
@@ -210,14 +202,6 @@ export default function MenuTop() {
                         {generativeItems(gid)}
                       </MenuDropdownNest>
                     ))}
-              </MenuDropdownNest>
-            ))}
-            {/* Labs Type Lab section — parked here, not a Generative type. */}
-            <MenuDropdownDivider />
-            <div className="kol-helper-10 text-subtle px-3 pt-2 pb-1">Type Lab</div>
-            {TYPE_LAB_TREE.map((parent) => (
-              <MenuDropdownNest key={parent.label} label={parent.label}>
-                {generativeItems(parent.groups[0])}
               </MenuDropdownNest>
             ))}
           </div>
@@ -289,17 +273,11 @@ export default function MenuTop() {
           </div>
         </MenuItem>
 
-        <MenuItem label="Mode" panelClassName="z-[1000]">
+        <MenuItem label="Tools" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
-            {modes.map((m) => (
-              <MenuDropdownItem
-                key={m.id}
-                onClick={() => navigate(`/editor/${m.id}`)}
-                shortcut={currentMode === m.id ? <EditorIcon name="check" size={11} /> : undefined}
-              >
-                {m.title}
-              </MenuDropdownItem>
-            ))}
+            <MenuDropdownItem onClick={openColorModal}>
+              Color
+            </MenuDropdownItem>
           </div>
         </MenuItem>
 

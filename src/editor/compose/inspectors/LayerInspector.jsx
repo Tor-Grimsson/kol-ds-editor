@@ -18,6 +18,7 @@ import BindDot from '../../params/BindDot'
 import { BLEND_MODES } from '../LayerStack'
 import { filterById } from '../../../filters'
 import { loopById, loopBgToggleable } from '../../../loops/registry'
+import { MISC_TREE } from '../../../loops/taxonomy'
 import { LoopPicker } from './LoopPicker'
 
 /**
@@ -105,7 +106,8 @@ export default function LayerInspector({ layer }) {
         * Parameters); bg toggle hidden for loops whose bg feeds their
         * color math. */}
       {layer.type === 'loop' && <LoopPicker layer={layer} />}
-      {layer.type === 'loop' && loopBgToggleable(loopById(layer.loopId)) && (
+      {layer.type === 'misc' && <LoopPicker layer={layer} tree={MISC_TREE} />}
+      {(layer.type === 'loop' || layer.type === 'misc') && loopBgToggleable(loopById(layer.loopId)) && (
         <LabeledControl label="Background">
           <ViewToggle
             options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
@@ -154,18 +156,21 @@ export default function LayerInspector({ layer }) {
 /* Pointer rows → the Parameters / Effects tabs (SelectionPalettePanel
  * listens). One row for the type's own parameters, one for its effect
  * (Phase 7 — every positioned layer can host one; the photo row IS the
- * effect row). */
+ * effect row). Text/pattern rows open their selection-driven Text/Pattern
+ * tabs — the styling surface's home since it left Parameters. */
 const PARAMS_LABELS = {
   shape:   () => 'Shape parameters',
   text:    () => 'Text parameters',
   pattern: () => 'Pattern parameters',
   loop:    (l) => `Loop · ${l.presetLabel ?? 'parameters'}`,
+  misc:    (l) => `Misc · ${l.presetLabel ?? 'parameters'}`,
   kinetic: (l) => `Kinetic · ${l.presetLabel ?? 'parameters'}`,
 }
+const PARAMS_EVENTS = { pattern: 'kol:open-pattern', text: 'kol:open-text' }
 const EFFECTABLE = new Set(['shape', 'text', 'pattern', 'path', 'loop', 'photo'])
 
 function ParamsLink({ layer }) {
-  const openParams  = () => window.dispatchEvent(new CustomEvent('kol:open-params'))
+  const openParams  = () => window.dispatchEvent(new CustomEvent(PARAMS_EVENTS[layer.type] ?? 'kol:open-params'))
   const openEffects = () => window.dispatchEvent(new CustomEvent('kol:open-effects'))
   const labelFor = PARAMS_LABELS[layer.type]
   /* Engine (GL) loops can't host effects yet (no GL source path) — showing
@@ -180,7 +185,7 @@ function ParamsLink({ layer }) {
         <EditorButton
           variant="secondary" size="sm" className="w-full"
           onClick={openParams}
-          title="Open the Parameters tab"
+          title={layer.type === 'pattern' ? 'Open the Pattern tab' : layer.type === 'text' ? 'Open the Text tab' : 'Open the Parameters tab'}
         >
           {labelFor(layer)}
         </EditorButton>

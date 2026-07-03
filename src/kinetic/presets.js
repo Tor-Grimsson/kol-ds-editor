@@ -33,6 +33,10 @@ const INSTANCE_DEFAULTS = {
   path: { type: 'line', ...PATH_DEFAULTS },
   motion: { mode: 'none', cycles: 1, phase: 0.5, amp: 0.3, axis: 'wght', field: 'x' },
   motions: [],              // additional motion layers, composed on top of `motion`
+  // morph render mode — glyph-outline interpolation (the "morph monster"). off by
+  // default. Cut A = this instance's font + vf; Cut B = vf2 (same font, defaults
+  // to axis maxes) OR face2 (a different font, cross-face).
+  morph: { on: false, mode: 'morph', vf2: {}, face2: '', curve: 'flat', blend: 0.5, cp1: { x: 0.33, y: 0.33 }, cp2: { x: 0.66, y: 0.66 } },
 }
 
 // vf restricted to the font's axes, missing ones filled with the axis default.
@@ -44,7 +48,9 @@ export function normalizeVf(fontKey, vf = {}) {
 }
 
 // Merge one partial instance over INSTANCE_DEFAULTS (id assigned if absent).
-function mergeInstance(p = {}, i = 0) {
+// Exported for the Elements editor (KineticPanel) — `mergeInstance({ id })`
+// is a fresh default element.
+export function mergeInstance(p = {}, i = 0) {
   const out = {
     id: p.id || `i${i}`,
     ...INSTANCE_DEFAULTS,
@@ -54,6 +60,7 @@ function mergeInstance(p = {}, i = 0) {
     motions: Array.isArray(p.motions) ? p.motions.map((mm) => ({ ...INSTANCE_DEFAULTS.motion, ...mm })) : [],
     offset: { ...INSTANCE_DEFAULTS.offset, ...(p.offset || {}) },
     opentype: { ...(p.opentype || {}) },
+    morph: { ...INSTANCE_DEFAULTS.morph, ...(p.morph || {}), vf2: { ...(p.morph?.vf2 || {}) } },
   }
   out.vf = normalizeVf(out.font, p.vf)
   return out
@@ -99,9 +106,6 @@ export const KINETIC_PRESETS = [
   // kol-labs-single src/pages/kinetic (data/presets.js × scenes/groups.js):
   // one comp per scene aesthetic and per element building block. Ids keep the
   // labs preset ids (provenance); labels take the group names.
-  // DROPPED: the six morph-* presets (the morph render mode — opentype.js
-  // glyph-outline interpolation — is not ported), so the Morph scene is
-  // represented by a vfwave member instead.
   // FONT SUBS: jetbrains (mono, file not shipped) → rot condensed (wdth 90);
   // ordspor (not shipped) avoided entirely by representative choice.
 
@@ -115,7 +119,7 @@ export const KINETIC_PRESETS = [
     ) },
   { id: 'custom-s', label: 'Flow', sub: 'Scenes', // labs 'Custom S' — freeform Catmull-Rom path, path shown
     comp: lab({ text: 'freeform', fontSize: 96, vf: { wght: 600 }, path: { type: 'custom' }, showPath: true }) },
-  { id: 'malromur-wave', label: 'Morph', sub: 'Scenes', // labs 'Malromur wave' (the morph-render presets are dropped)
+  { id: 'malromur-wave', label: 'Morph', sub: 'Scenes', // labs 'Malromur wave' (the Morph scene's vfwave member)
     comp: lab({ text: 'Malromur', font: 'malromur', fontSize: 132, vf: { wght: 300 }, motion: { mode: 'vfwave', axis: 'wght', cycles: 2, phase: 0.5 } }) },
   { id: 'flag', label: 'Wave', sub: 'Scenes', // labs 'Flag'
     comp: lab({ text: 'flag', font: 'rot', fontSize: 168, vf: { wdth: 120, wght: 600 }, motion: { mode: 'glyphwave', cycles: 1, phase: 0.5, amp: 0.5 } }) },
@@ -219,6 +223,21 @@ export const KINETIC_PRESETS = [
   { id: 'rot-width-slow', label: 'Width slow', sub: 'Width',
     comp: lab({ text: 'expand', font: 'rot', fontSize: 130, vf: { wdth: 100, wght: 500 }, motion: { mode: 'vfwave', axis: 'wdth', cycles: 1, phase: 0.3 } }) },
 
+  // ── Variable · Morph (the morph render mode — glyph-outline interpolation;
+  // labs configs verbatim, all faces shipped — no substitutions) ──
+  { id: 'morph-mtl', label: 'Made to last', sub: 'Morph',
+    comp: lab({ text: 'Made to last', font: 'rot', fontSize: 150, vf: { wdth: 64, wght: 100 }, morph: { on: true, mode: 'morph', curve: 'linear', blend: 0.5, vf2: { wdth: 172, wght: 900 } } }) },
+  { id: 'morph-wave', label: 'Morph wave', sub: 'Morph',
+    comp: lab({ text: 'MORPH', font: 'rot', fontSize: 200, vf: { wdth: 64, wght: 200 }, morph: { on: true, mode: 'morph', curve: 'sine', blend: 0.5, vf2: { wdth: 172, wght: 900 } } }) },
+  { id: 'morph-ease', label: 'Heavy → light', sub: 'Morph',
+    comp: lab({ text: 'gradient', font: 'rot', fontSize: 150, vf: { wdth: 120, wght: 900 }, morph: { on: true, mode: 'morph', curve: 'ease', blend: 0.5, vf2: { wdth: 120, wght: 100 } } }) },
+  { id: 'morph-random', label: 'Ransom note', sub: 'Morph',
+    comp: lab({ text: 'CHAOS', font: 'rot', fontSize: 170, vf: { wdth: 100, wght: 500 }, morph: { on: true, mode: 'random', blend: 0.37 } }) },
+  { id: 'morph-fade', label: 'Fade A↔B', sub: 'Morph',
+    comp: lab({ text: 'between', font: 'gullhamrar', fontSize: 150, vf: { wght: 300 }, morph: { on: true, mode: 'fade', blend: 0.5, vf2: { wght: 900 } } }) },
+  { id: 'morph-cross', label: 'Cross-face', sub: 'Morph',
+    comp: lab({ text: 'hybrid', font: 'rot', fontSize: 150, vf: { wdth: 100, wght: 600 }, morph: { on: true, mode: 'morph', blend: 0.5, face2: 'gullhamrar' } }) },
+
   // ── Variable · On path ──
   { id: 'arc-weight', label: 'Morph on arc', sub: 'On path',
     comp: lab({ text: 'morph', fontSize: 120, path: { type: 'arc', amp: 0.3 }, motion: { mode: 'vfwave', axis: 'wght', cycles: 1, phase: 0.6 } }) },
@@ -305,6 +324,18 @@ export const KINETIC_PRESETS = [
 ]
 
 export const kineticPresetById = (id) => KINETIC_PRESETS.find((p) => p.id === id) || KINETIC_PRESETS[0]
+
+/* The kinetic picker tree — TYPE > CATEGORY > PRESET (the 01-hierarchy.md
+ * levels over this catalog): 'Type' = the labs TYPE-page ports (Radial /
+ * Rings / Path), 'Kinetic' = the labs KINETIC catalog — Scenes, Elements,
+ * the backfill subs, and Variable · Morph. Categories derive from the
+ * presets' `sub` fields in declaration order, so new presets slot in
+ * without touching the tree. */
+const TYPE_SUBS = ['Radial', 'Rings', 'Path']
+export const KINETIC_TREE = [
+  { label: 'Type',    subs: TYPE_SUBS },
+  { label: 'Kinetic', subs: [...new Set(KINETIC_PRESETS.map((p) => p.sub))].filter((s) => !TYPE_SUBS.includes(s)) },
+]
 
 // Deep copy so layer edits never mutate the preset constants.
 export const presetComp = (preset) => structuredClone(preset.comp)

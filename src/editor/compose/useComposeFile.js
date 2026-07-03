@@ -2,6 +2,7 @@ import { useModal } from '@kolkrabbi/kol-component'
 import { useComposeState } from './state'
 import { useGeneratorLibrary } from '../library/LibraryProvider'
 import { buildLayersSvg, downloadComposeSvg, downloadComposePng } from './build'
+import { warmTextFonts } from '../modes/type/textOutline'
 import { resolveLayersDeep } from '../params/resolve'
 import { transport } from '../params/transport'
 
@@ -97,13 +98,20 @@ export function useComposeFile() {
   /* Export snapshots the CURRENT frame — bound (animated/modulated) props
    * resolve to concrete values so build.js never sees a binding object. */
   const buildArgs = { layers: resolveLayersDeep(layers, transport.getCtx()), palette, aspect, canvasW, canvasH }
-  const onExportSvg = () => downloadComposeSvg(buildLayersSvg(buildArgs), `compose-${canvasW}x${canvasH}-${Date.now().toString(36)}.svg`)
+  /* Text layers export as glyph outlines — parse the cut TTFs (async,
+   * promise-cached) BEFORE the sync buildLayersSvg call; a cold cut falls
+   * back to foreignObject inside build.js. */
+  const onExportSvg = async () => {
+    await warmTextFonts(buildArgs.layers)
+    downloadComposeSvg(buildLayersSvg(buildArgs), `compose-${canvasW}x${canvasH}-${Date.now().toString(36)}.svg`)
+  }
   /* PNG takes the footer's 1×/2×/3× scale on top of the set W×H (the canvas
    * carries real output pixels; scale is a resolution bump). Guarded so
    * event-object callers (topbar menu onClick) fall back to 1×. SVG is
    * vector — scale doesn't apply. */
-  const onExportPng = (scale) => {
+  const onExportPng = async (scale) => {
     const k = [1, 2, 3].includes(scale) ? scale : 1
+    await warmTextFonts(buildArgs.layers)
     downloadComposePng(buildLayersSvg(buildArgs), `compose-${canvasW * k}x${canvasH * k}-${Date.now().toString(36)}.png`, k)
   }
 
@@ -119,6 +127,9 @@ export function useComposeFile() {
   const onExportWebm = async (scale) => {
     if (typeof MediaRecorder === 'undefined') return
     const k = [1, 2, 3].includes(scale) ? scale : 1
+    /* Warm text-layer fonts once — every baked frame builds sync from the
+     * same resolved-Font cache. */
+    await warmTextFonts(buildArgs.layers)
     const N = Math.max(1, Math.round(transport.getLoopSeconds() * WEBM_FPS))
     const wasPlaying = transport.isPlaying()
     const prevT = transport.getT()

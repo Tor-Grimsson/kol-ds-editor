@@ -32,24 +32,20 @@ export const GENERATIVE_TREE = [
     labels: { scene: 'Primitive' } },
 ]
 
-/* Labs Type Lab section — parked, not a Generative type. */
-export const TYPE_LAB_TREE = [
+/* The `misc` layer's tree — home of the oddball rule-driven generators that
+ * are neither Generative types nor Effects. Para Type first (labs Type Lab);
+ * Interfaces (labs Composition screens/elements) joins later. */
+export const MISC_TREE = [
   { label: 'Para Type', groups: ['paratype'] },
 ]
 
-/* EFFECTS > Pattern — the four labs /optic/* generator pages. They insert
- * loop layers (they generate, nothing to filter) but belong to the EFFECTS
- * method taxonomically. Mesh Gradient's presets live in the GL `gradients`
- * group under sub 'Mesh'. */
-export const FX_PATTERN_TREE = [
-  { label: 'Pattern', groups: ['optic'] },
-]
+/* The loop layer's picker tree = the Generative types only. Groups living
+ * elsewhere (optic → EFFECTS > Pattern, paratype → the misc layer) resolve
+ * to a read-only identity via LEGACY_GROUP_LABELS instead of appearing as
+ * pickable generative types. */
+export const PICKER_TREE = GENERATIVE_TREE
 
-/* Every tree a loop layer's group can come from — the inspector picker
- * resolves against this so optic/paratype layers still display truthfully
- * (with their method spelled out). */
-export const PICKER_TREE = [
-  ...GENERATIVE_TREE,
-  { label: 'Pattern (Effects)',    groups: ['optic'] },
-  { label: 'Para Type (Type Lab)', groups: ['paratype'] },
-]
+export const LEGACY_GROUP_LABELS = {
+  optic:    'Pattern · Effects',
+  paratype: 'Para Type · Misc',
+}

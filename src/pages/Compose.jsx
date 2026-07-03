@@ -1,19 +1,21 @@
 import usePageTitle from '../components/hooks/usePageTitle'
 import EditorShell from '../editor/EditorShell'
 import CanvasArea from '../editor/compose/CanvasArea'
+import ColorModal from '../editor/color/ColorModal'
 import LayersAssetsPanel from '../editor/shell/panels/LayersAssetsPanel'
 import SelectionPalettePanel from '../editor/shell/panels/SelectionPalettePanel'
-import ColorModal from '../editor/color/ColorModal'
 import ToolPalette from '../editor/shell/panels/ToolPalette'
 import EditorFooter from '../editor/shell/panels/EditorFooter'
 import TimelineDock from '../editor/params/TimelineDock'
 
 /**
- * Compose mode body. File / Mode / Canvas / Templates menus live in the
- * topbar (rendered by EditorShell). ToolPalette sits above the canvas in
- * the canvas-column header. Left rail: ColorModal (top) + Layers/Assets
- * tab group + the Transport/Output/File footer (pinned). Right rail:
- * Palette/Inspector tab group that auto-flips to Inspector on layer-select.
+ * Compose body — the editor surface. File / Canvas / Templates menus live in
+ * the topbar (rendered by EditorShell). ToolPalette sits above the canvas in
+ * the canvas-column header. Left rail: Layers/Assets tab group + the
+ * Transport/Output/File footer (pinned). Right rail: Palette/Inspector tab
+ * group that auto-flips to Inspector on layer-select. ColorModal here is the
+ * per-layer color panel (Stroke/Colour/Swatches); the palette generator is
+ * the separate PaletteModal mounted by Editor.
  */
 const COMPOSE_REGISTRY = {
   canvas: CanvasArea,
@@ -28,6 +30,6 @@ const COMPOSE_REGISTRY = {
 }
 
 export default function Compose() {
-  usePageTitle('Compose')
+  usePageTitle('Editor')
   return <EditorShell registry={COMPOSE_REGISTRY} />
 }

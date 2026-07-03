@@ -2,6 +2,7 @@ import { buildPath, isArray, isRadial, isRings } from './paths.js'
 import { glyphAnim } from './animations.js'
 import { featureString } from './features.js'
 import { fontByKey, vfString } from './fonts.js'
+import { buildMorphGlyphs, resolvedFont, ensureGlyphFont } from './morph.js'
 
 /* KineticType — the SVG type composition engine, ported from kol-labs-single
  * src/pages/kinetic/engine/KineticType.js (Phase 10).
@@ -20,10 +21,16 @@ import { fontByKey, vfString } from './fonts.js'
  *   - no internal rAF / transport / duration: the host calls renderAt(u)
  *     per transport tick (KineticLayer subscribes via useTransportCtx).
  *   - stripped vs labs: expression params (plain numerics — the established
- *     port pattern), the morph render mode (opentype.js outline interpolation
- *     — none of the shipped presets use it), the pattern backdrop
- *     (patternLoop), export/record/hit-test (build.js serializes the live SVG
- *     subtree instead).
+ *     port pattern), the pattern backdrop (patternLoop), export/record/
+ *     hit-test (build.js serializes the live SVG subtree instead).
+ *   - PORTED (r4): the morph render mode — opentype.js glyph-outline
+ *     interpolation (see morph.js). When `instance.morph.on`, glyphs render
+ *     as <path> outlines instead of <text>: Cut A = the instance's font+vf,
+ *     Cut B = morph.vf2 (same VF, other coords) or morph.face2 (cross-face).
+ *     Outlines parse async (ensureGlyphFont) — the instance renders in text
+ *     mode until they resolve, then swaps (labs' ensure/cache pattern), so
+ *     renderAt stays synchronous. Radial/rings arrangements are <text>-only
+ *     (labs rule).
  *   - ADDED vs labs (r3 — de-lockstep the repeated strings): per-instance
  *     `phase` (0..1) shifts that instance's u, and per-instance `stagger`
  *     (0..1) desyncs the instance's repeated units — spokes, rings, grid
@@ -68,7 +75,7 @@ export default class KineticType {
     this.params = asComposition(null)
     this.w = 0
     this.h = 0
-    this._rt = new Map() // id → { group, pathEl, glyphG, glyphEls, cache, glyphKey, closed }
+    this._rt = new Map() // id → { group, pathEl, glyphG, glyphEls, cache, glyphKey, closed, kind?, morph* (see _setKind) }
     this._instSig = '' // instance-id signature; reconcile the DOM only when it changes
     this._needsRemeasure = false // set when fonts finish loading → drop caches once
 
@@ -238,6 +245,27 @@ export default class KineticType {
     const ox = (p.offset?.x || 0) * this.w
     const oy = (p.offset?.y || 0) * this.h
     rt.group.setAttribute('transform', `translate(${ox.toFixed(2)} ${oy.toFixed(2)})`)
+
+    // ── morph render mode: real glyph-outline interpolation (<path> glyphs) ──
+    // Needs opentype outlines; if they aren't parsed yet, kick the load and fall
+    // back to the live <text> render so nothing blanks while it streams in.
+    // Radial/rings arrangements are <text>-only (no morph), so they skip this.
+    if (p.morph?.on && !isRadial(type) && !isRings(type)) {
+      const urlA = font.url
+      const face2 = p.morph.face2 ? fontByKey(p.morph.face2) : null
+      const urlB = face2 ? face2.url : urlA
+      const fa = resolvedFont(urlA)
+      const fb = resolvedFont(urlB)
+      if (fa && fb) {
+        this._setKind(rt, 'morph')
+        this._renderMorph(p, rt, u, fa, fb, font, text, type)
+        return
+      }
+      if (!fa) ensureGlyphFont(urlA).catch(() => {})
+      if (!fb && urlB !== urlA) ensureGlyphFont(urlB).catch(() => {})
+    }
+
+    this._setKind(rt, 'text')
 
     if (isArray(type)) {
       rt.pathEl.setAttribute('d', '')
@@ -477,6 +505,211 @@ export default class KineticType {
         el2.setAttribute('transform',
           `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${deg.toFixed(2)}) scale(${(a.scale * gscale).toFixed(3)})`)
         this._styleGlyph(el2, p, font, a)
+      }
+    }
+  }
+
+  // ── morph render mode (glyph-outline interpolation) ──────────────────────
+  // Switch an instance's glyph pool between the <text> and <path> renderers.
+  // The two element kinds can't coexist in one glyphG, so swapping clears it.
+  _setKind(rt, kind) {
+    if (rt.kind === kind) return
+    rt.kind = kind
+    rt.glyphG.textContent = ''
+    rt.glyphEls = []
+    rt.morphEls = []
+    rt.glyphKey = ''
+    rt.morphKey = ''
+    rt.morphPoolKey = ''
+    rt.cache = null
+  }
+
+  _renderMorph(p, rt, u, fa, fb, font, text, type) {
+    const size = p.fontSize
+    const axes = font.axes || []
+    // Cut A = the instance's own axis coords. Cut B = vf2 (default = axis maxes)
+    // for a same-face morph, or the second face's default outline (cross-face).
+    const coordsA = {}
+    for (const a of axes) coordsA[a.tag] = p.vf?.[a.tag] ?? a.def
+    const cross = !!p.morph.face2
+    const coordsB = {}
+    if (!cross) for (const a of axes) coordsB[a.tag] = p.morph.vf2?.[a.tag] ?? a.max
+    const gap = size * 0.12 + (p.letterSpacing || 0)
+    const mode = p.morph.mode || 'morph'
+    const blend = p.morph.blend ?? 0.5
+    const curve = p.morph.curve || 'flat'
+    const cp1 = p.morph.cp1 || { x: 0.33, y: 0.33 }
+    const cp2 = p.morph.cp2 || { x: 0.66, y: 0.66 }
+    const fill = p.fill || '#e8e4dc'
+
+    // rebuild the glyph outlines only when something that changes geometry moves
+    const mk = JSON.stringify([text, p.font, p.morph.face2 || '', size, coordsA, coordsB, mode, blend, curve, cp1, cp2, p.letterSpacing || 0, fill])
+    const rebuilt = mk !== rt.morphKey
+    if (rebuilt) {
+      rt.morphKey = mk
+      const built = buildMorphGlyphs(fa, fb, text, size, { mode, blend, curve, cp1, cp2, coordsA, coordsB, axes, gap })
+      rt.morphData = built
+      const centers = []
+      let run = 0
+      for (const g of built.glyphs) { centers.push(run + g.advance / 2); run += g.advance }
+      rt.morphCenters = centers
+      rt.morphTotal = built.totalAdvance
+    }
+
+    const runLen = rt.morphData?.glyphs.length || 0
+    if (!text.length || !runLen) { rt.pathEl.setAttribute('d', ''); rt.pathEl.style.opacity = 0; return }
+
+    const grid = isArray(type)
+    const rows = grid ? Math.max(1, Math.round(p.path?.rows ?? 2)) : 1
+    const cols = grid ? Math.max(1, Math.round(p.path?.cols ?? 3)) : 1
+    const copies = grid ? rows * cols : 1
+    const poolRebuilt = this._ensureMorphPool(rt, runLen, copies, mode)
+    if (rebuilt || poolRebuilt) this._refreshMorphPaths(rt, copies, mode, fill)
+
+    if (grid) {
+      rt.pathEl.setAttribute('d', ''); rt.pathEl.style.opacity = 0
+      this._placeMorphArray(p, rt, font, u, rows, cols)
+      return
+    }
+    const path = buildPath(type, this.w, this.h, p.path || {})
+    rt.closed = path.closed
+    rt.pathEl.setAttribute('d', path.d)
+    rt.pathEl.setAttribute('stroke', p.showPath ? (p.fill || '#888') : 'none')
+    rt.pathEl.setAttribute('stroke-width', p.showPath ? 1 : 0)
+    rt.pathEl.style.opacity = p.showPath ? 0.25 : 0
+    this._placeMorphOnPath(p, rt, font, u)
+  }
+
+  // (re)build the <g>/<path> wrapper pool: copies × the glyph run. Each wrapper
+  // holds one <path> (morph/random) or two (fade: Cut A over Cut B).
+  _ensureMorphPool(rt, runLen, copies, mode) {
+    const key = `${runLen}|${copies}|${mode}`
+    if (key === rt.morphPoolKey) return false
+    rt.morphPoolKey = key
+    rt.glyphG.textContent = ''
+    rt.morphEls = []
+    const total = runLen * copies
+    for (let i = 0; i < total; i++) {
+      const g = el('g')
+      g.appendChild(el('path'))
+      if (mode === 'fade') g.appendChild(el('path'))
+      rt.glyphG.appendChild(g)
+      rt.morphEls.push(g)
+    }
+    return true
+  }
+
+  _refreshMorphPaths(rt, copies, mode, fill) {
+    const glyphs = rt.morphData?.glyphs || []
+    const runLen = glyphs.length
+    if (!runLen) return
+    for (let i = 0; i < rt.morphEls.length; i++) {
+      const g = rt.morphEls[i]
+      const gd = glyphs[i % runLen]
+      if (!gd) continue
+      const kids = g.childNodes
+      if (mode === 'fade') {
+        this._setMorphPath(kids[0], gd.dA, gd.bboxA, fill, gd.opA)
+        this._setMorphPath(kids[1], gd.dB, gd.bboxB, fill, gd.opB)
+      } else {
+        this._setMorphPath(kids[0], gd.d, gd.bbox, fill, 1)
+      }
+    }
+  }
+
+  // centre the outline on the origin (bbox centre) so the wrapper's transform
+  // positions it exactly like text-anchor:middle / dominant-baseline:central.
+  _setMorphPath(pathEl, d, bbox, fill, opacity) {
+    if (!pathEl) return
+    pathEl.setAttribute('d', d || '')
+    pathEl.setAttribute('fill', fill)
+    pathEl.setAttribute('fill-rule', 'evenodd')
+    pathEl.setAttribute('opacity', opacity)
+    const cx = (bbox.x1 + bbox.x2) / 2
+    const cy = (bbox.y1 + bbox.y2) / 2
+    pathEl.setAttribute('transform', `translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`)
+  }
+
+  // Place morph wrappers along the path — same geometry as _placeOnPath, but on
+  // <g> wrappers (no per-glyph font styling; outlines are baked). Carries the
+  // editor's stagger extension exactly like _placeOnPath.
+  _placeMorphOnPath(p, rt, font, u, els = rt.morphEls) {
+    const centers = rt.morphCenters
+    const total = rt.morphTotal
+    if (!centers || !els) return
+    const pathLen = rt.pathEl.getTotalLength()
+    if (!pathLen) return
+    const align = p.align || 'center'
+    const startLen = align === 'start' ? 0 : align === 'end' ? pathLen - total : (pathLen - total) / 2
+    const eps = 0.75
+    const closed = rt.closed
+    const flow = p.flow === 'flow' && !closed
+    const wrap = (L) => closed ? ((L % pathLen) + pathLen) % pathLen : Math.max(0, Math.min(pathLen, L))
+    const ptAt = (L) => {
+      if (flow && (L < 0 || L > pathLen)) {
+        const edge = L < 0 ? 0 : pathLen
+        const base = rt.pathEl.getPointAtLength(edge)
+        const a2 = rt.pathEl.getPointAtLength(Math.max(0, edge - eps))
+        const b2 = rt.pathEl.getPointAtLength(Math.min(pathLen, edge + eps))
+        let dx = b2.x - a2.x, dy = b2.y - a2.y
+        const len = Math.hypot(dx, dy) || 1
+        dx /= len; dy /= len
+        const over = L - edge
+        return { x: base.x + dx * over, y: base.y + dy * over }
+      }
+      return rt.pathEl.getPointAtLength(wrap(L))
+    }
+    const sk = p.italic ? ' skewX(-12)' : ''
+    const n = Math.min(els.length, centers.length)
+    const stag = clamp01(p.stagger || 0)
+    const mult = Math.max(1, Math.round(p.multiply || 1))
+    const copyLen = (centers.length + 2) / mult
+    for (let i = 0; i < n; i++) {
+      const L0 = startLen + centers[i]
+      const pBase = ptAt(L0)
+      const ug = stag && mult > 1 ? wrap01(u + stag * Math.floor(i / copyLen) / mult) : u
+      const a = this._anim(p, { i, n: centers.length, u: ug, sizePx: p.fontSize, pathLen, nx: this.w ? pBase.x / this.w : 0.5, ny: this.h ? pBase.y / this.h : 0.5 }, font)
+      const L = L0 + a.dLen
+      const pt = ptAt(L)
+      const A = ptAt(L - eps)
+      const B = ptAt(L + eps)
+      const ang = Math.atan2(B.y - A.y, B.x - A.x) * 180 / Math.PI
+      els[i].setAttribute('transform',
+        `translate(${pt.x.toFixed(2)} ${pt.y.toFixed(2)}) rotate(${(ang + a.dRot).toFixed(2)}) translate(0 ${(-a.dNormal).toFixed(2)}) scale(${a.scale.toFixed(3)})${sk}`)
+      els[i].setAttribute('opacity', a.opacity)
+    }
+  }
+
+  // Place morph wrappers as a rows×cols grid — the morph twin of _placeArray,
+  // per-cell stagger included.
+  _placeMorphArray(p, rt, font, u, rows, cols, els = rt.morphEls) {
+    const centers = rt.morphCenters
+    const total = rt.morphTotal
+    if (!centers || !els) return
+    const runLen = centers.length
+    if (!runLen) return
+    const m = Math.min(this.w, this.h) * 0.08
+    const cellW = (this.w - 2 * m) / cols
+    const cellH = (this.h - 2 * m) / rows
+    const sk = p.italic ? ' skewX(-12)' : ''
+    const stag = clamp01(p.stagger || 0)
+    const cells = rows * cols
+    for (let cell = 0; cell < cells; cell++) {
+      const r = Math.floor(cell / cols)
+      const c = cell % cols
+      const cx = m + c * cellW + cellW / 2
+      const cy = m + r * cellH + cellH / 2
+      const originX = cx - total / 2
+      const uc = stag ? wrap01(u + stag * cell / cells) : u
+      for (let j = 0; j < runLen; j++) {
+        const idx = cell * runLen + j
+        const e = els[idx]
+        if (!e) continue
+        const x = originX + centers[j]
+        const a = this._anim(p, { i: idx, n: cells * runLen, u: uc, sizePx: p.fontSize, pathLen: 0, nx: this.w ? x / this.w : 0.5, ny: this.h ? cy / this.h : 0.5 }, font)
+        const y = cy - a.dNormal
+        e.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${a.dRot.toFixed(2)}) scale(${a.scale.toFixed(3)})${sk}`)
+        e.setAttribute('opacity', a.opacity)
       }
     }
   }

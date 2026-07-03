@@ -1,41 +1,40 @@
-import { Fragment, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState } from 'react'
 import EditorButton from '../../components/EditorButton'
 import { Dropdown } from '@kolkrabbi/kol-component'
 import { LabeledControl } from '@kolkrabbi/kol-component'
 import { SegmentedToggle } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
-import { Slider, Textarea } from '@kolkrabbi/kol-component'
-import { ColorField } from './ColorField'
-import { useComposeState, resolveColor } from '../state'
+import { useComposeState } from '../state'
 import { findLayerDeep } from '../helpers'
 import { labelForLayer } from '../labels'
 import { useLayerEdit } from '../useLayerEdit'
 import { useGeneratorLibrary } from '../../library/LibraryProvider'
-import { usePatternState } from '../../modes/pattern/state'
-import { useTypeState } from '../../modes/type/state'
-import RuleRow, { newRule, randomRule } from '../../modes/pattern/RuleRow'
 import AutoControls from '../../params/AutoControls'
 import BindDot from '../../params/BindDot'
 import { SHAPE_SCHEMA } from '../../params/schemas/shape'
 import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
 import { TEXT_SCHEMA } from '../../params/schemas/text'
 import { PHOTO_SCHEMA } from '../../params/schemas/photo'
+import { TEXT_TAB_KEYS } from './TextPanel'
 import { loopById, loopBgToggleable } from '../../../loops/registry'
+import { MISC_TREE } from '../../../loops/taxonomy'
 import { LoopPicker } from './LoopPicker'
+import KineticPanel from './KineticPanel'
 import { themeParams } from '../../../loops/theme'
 import { THEME_OPTIONS, DEFAULT_THEME } from '../../../loops/lib/themes'
-import { KINETIC_PRESETS, kineticPresetById, presetComp } from '../../../kinetic/presets'
-import { KINETIC_KNOBS, knobOptions, randomiseComp } from '../../../kinetic/knobs'
 
 /**
  * ParametersPanel — the Parameters tab of the right rail (Phase 6-A).
  *
  * The Inspector stays high-level (position / transform / opacity / blend /
  * paint); everything schema-driven or type-deep lives HERE: shape kind
- * params, text typography, pattern surface, photo fit, loop controls.
- * Inspector pointer rows flip to this tab (`kol:open-params`). Effects
- * (filter picker + params) live in the dedicated Effects tab (EffectsPanel).
+ * params, photo fit, loop controls. Text typography and the pattern surface
+ * moved to their selection-driven Text / Pattern tabs (TextPanel /
+ * PatternPanel) — one home per control; this tab keeps their non-styling
+ * remainder (content, saved-spec pickers, mode/flatten actions, tab:'anim'
+ * params). Inspector pointer rows flip to this tab (`kol:open-params`).
+ * Effects (filter picker + params) live in the dedicated Effects tab
+ * (EffectsPanel).
  *
  * Labs information architecture (kol-labs-single scanlines): a segmented
  * Generate · Style · Animation strip splits each type's surface — Generate
@@ -54,6 +53,10 @@ const SUBTAB_OPTIONS = [
   { value: 'anim',     label: 'Animation' },
 ]
 const ANIM_HINT = 'Animate any parameter via its bind dot.'
+
+/* Text params minus the styling keys the Text tab owns (one home per
+ * control) — leaves Content plus any future non-styling params. */
+const TEXT_PARAMS_SCHEMA = TEXT_SCHEMA.filter((p) => !TEXT_TAB_KEYS.has(p.key))
 
 export default function ParametersPanel() {
   const { selectedId, layers } = useComposeState()
@@ -118,8 +121,13 @@ function LayerParameters({ layer }) {
   } else if (layer.type === 'loop') {
     body = <LoopFields {...shared} tabStrip={tabStrip} />
     stripInBody = true
+  } else if (layer.type === 'misc') {
+    body = <LoopFields {...shared} tabStrip={tabStrip} tree={MISC_TREE} />
+    stripInBody = true
   } else if (layer.type === 'kinetic') {
-    body = <KineticFields {...shared} />
+    /* Kinetic places the strip itself — picker + Elements stay above it. */
+    body = <KineticPanel {...shared} tabStrip={tabStrip} />
+    stripInBody = true
   } else if (layer.type === 'path') {
     body = tab === 'anim' ? <p className="kol-helper-12 text-meta">{ANIM_HINT}</p> : null
   } else {
@@ -139,7 +147,7 @@ function LayerParameters({ layer }) {
  * preset picker (labs Loops page model, always visible above the sub-tab
  * strip), then Generate (theme/toggles + randomise) · Style · Animation.
  */
-function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, tabStrip }) {
+function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, tabStrip, tree }) {
   const loop = loopById(layer.loopId)
 
   /* Theme — recolour roled color params (bg/fg/accent) via the imported
@@ -168,7 +176,7 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
 
   return (
     <>
-      <LoopPicker layer={layer} />
+      <LoopPicker layer={layer} tree={tree} />
 
       {tabStrip}
 
@@ -229,135 +237,21 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
 }
 
 /**
- * KineticFields — the kinetic-type layer's control surface: a preset player
- * over the opaque `layer.comp` composition, deliberately NOT the labs kinetic
- * editor. Knobs come from KINETIC_KNOBS (src/kinetic/knobs.js) — a declarative
- * schema whose get/set are pure comp transforms, rendered here rather than via
- * AutoControls because the comp is the layer's single source of truth (flat
- * layer-prop mirrors would desync on preset switches). Every edit writes a
- * fresh comp through setProp (coalesced history). Generate = preset picker +
- * per-instance text + Randomise; Style = look/arrangement knobs; Animation =
- * motion knobs + stagger (per-string desync) with the bind-dot hint.
- */
-function KineticFields({ layer, setProp, updateLayer, palette, tab }) {
-  const comp = layer.comp ?? { bg: '#0b0d12', instances: [] }
-  const presetOptions = KINETIC_PRESETS.map((p) => ({ value: p.id, label: p.sub ? `${p.sub} · ${p.label}` : p.label }))
-
-  /* Picking a preset resets the whole composition (loop preset semantics —
-   * a curated starting point, not a patch). Discrete history entry. */
-  const applyPreset = (id) => {
-    const preset = kineticPresetById(id)
-    if (!preset) return
-    updateLayer(layer.id, { presetId: preset.id, presetLabel: preset.label, comp: presetComp(preset) })
-  }
-
-  /* Immutable comp writes — knobs return fresh objects all the way down so
-   * the renderer's identity check re-applies the composition. */
-  const writeComp = (next) => setProp('comp', next)
-  const patchInstance = (idx, partial) =>
-    writeComp({ ...comp, instances: comp.instances.map((x, i) => (i === idx ? { ...x, ...partial } : x)) })
-
-  /* Randomise — roll the tractable knobs (noRandom/when honored in
-   * randomiseComp). Discrete history entry, like a preset pick. */
-  const onRandomise = () => updateLayer(layer.id, { comp: randomiseComp(comp) })
-
-  const knobs = KINETIC_KNOBS.filter((k) => k.tab === tab && (!k.when || k.when(comp)))
-
-  return (
-    <>
-      {tab === 'generate' && (
-        <>
-          <LabeledControl label="Preset">
-            <Dropdown
-              variant="subtle" size="sm" className="w-full"
-              options={presetOptions}
-              value={layer.presetId}
-              onChange={applyPreset}
-            />
-          </LabeledControl>
-          {comp.instances.map((inst, i) => (
-            <LabeledControl key={inst.id ?? i} label={i === 0 ? 'Text' : `Text ${i + 1}`}>
-              <Textarea
-                variant="ghost" size="sm" rows={2}
-                value={inst.text ?? ''}
-                onChange={(e) => patchInstance(i, { text: e.target.value })}
-              />
-            </LabeledControl>
-          ))}
-          <EditorButton variant="primary" size="sm" className="w-full" onClick={onRandomise}>
-            Randomise
-          </EditorButton>
-        </>
-      )}
-
-      {tab !== 'generate' && knobs.map((k, i) => (
-        <Fragment key={k.key}>
-          {k.section && k.section !== knobs[i - 1]?.section && (
-            <span className="kol-helper-10 text-meta">{k.section}</span>
-          )}
-          <KineticKnob knob={k} comp={comp} palette={palette} onComp={writeComp} />
-        </Fragment>
-      ))}
-
-      {tab === 'anim' && <p className="kol-helper-12 text-meta">{ANIM_HINT}</p>}
-    </>
-  )
-}
-
-/* One kinetic knob → the matching KOL control. Writes go through the knob's
- * pure comp transform; palette refs resolve to literal hex at write time —
- * the SVG engine paints raw fill strings (same trade-off as "Edit in Pattern
- * mode"). */
-function KineticKnob({ knob: k, comp, palette, onComp }) {
-  const value = k.get(comp)
-  const write = (v) => onComp(k.set(comp, v))
-  if (k.type === 'color') {
-    return <ColorField label={k.label} value={value} onChange={(v) => write(resolveColor(v, palette) ?? v)} palette={palette} />
-  }
-  if (k.type === 'select') {
-    return (
-      <LabeledControl label={k.label}>
-        <Dropdown variant="subtle" size="sm" className="w-full" options={knobOptions(k, comp)} value={value} onChange={write} />
-      </LabeledControl>
-    )
-  }
-  return (
-    <LabeledControl label={k.label}>
-      <Slider min={k.min} max={k.max} step={k.step ?? 1} value={typeof value === 'number' ? value : k.min} onChange={write} />
-    </LabeledControl>
-  )
-}
-
-/**
- * PatternFields — full Pattern Lab control surface. Layer carries the pattern
- * params directly; LayerRenderer + build.js call `buildPatternSvg` per render.
+ * PatternFields — the pattern layer's NON-styling remainder. The pattern
+ * surface itself (schema params, rules editor, colors, save) lives in the
+ * Pattern tab (PatternPanel) — one home per control.
  *
  * "Apply saved pattern" picker reads from `library.pattern` (Pattern Lab's
- * save slot) and copies params into the layer. "Save to library" sends the
- * current layer's params back the other way — symmetric with Type Lab.
- * Generate holds the picker + actions; Style the params + rules editor.
+ * save slot) and copies params into the layer.
  */
 function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, tab }) {
-  const { library, savePattern } = useGeneratorLibrary()
-  const { flattenPattern }       = useComposeState()
-  const { loadPattern }          = usePatternState()
-  const navigate                 = useNavigate()
+  const { library }        = useGeneratorLibrary()
+  const { flattenPattern } = useComposeState()
   const patterns = library.pattern ?? []
   const patternOptions = [
     { value: '', label: '— pick spec' },
     ...patterns.map((p, i) => ({ value: p.id, label: `Pattern ${i + 1}` })),
   ]
-
-  const rules = layer.rules ?? []
-  const setRules = (next) => updateLayer(layer.id, { rules: next })
-  const addRule    = () => setRules([...rules, newRule()])
-  const updateRule = (idx, updated) => setRules(rules.map((r, i) => i === idx ? updated : r))
-  const removeRule = (idx) => setRules(rules.filter((_, i) => i !== idx))
-  const rerollRule = (idx) => setRules(rules.map((r, i) => i === idx ? { ...randomRule(), id: r.id } : r))
-  const randomizeRules = () => {
-    const count = Math.floor(Math.random() * 3) + 1
-    setRules(Array.from({ length: count }, randomRule))
-  }
 
   const onPickSpec = (id) => {
     if (!id) return
@@ -378,51 +272,6 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
     })
   }
 
-  const onSave = () => {
-    /* Save shape matches Pattern mode's saver: bg is the canonical source —
-     * `null` when off, hex/ref when on. patternFromSpec on load derives
-     * `bgOn = spec.bg != null` so we don't store a redundant flag. */
-    savePattern({
-      shapeId:   layer.shapeId,
-      customSvg: layer.customSvg,
-      cols:      layer.cols,
-      rows:      layer.rows,
-      gap:       layer.gap,
-      padding:   layer.padding,
-      stretch:   layer.stretch,
-      overflow:  layer.overflow,
-      bg:        layer.bgOn ? layer.bg : null,
-      color:     layer.color,
-      rules:     layer.rules ?? [],
-      scale:     layer.scale,
-    })
-  }
-
-  const onEditInPatternMode = () => {
-    /* Resolve palette refs to literal hex on entry — Pattern mode operates
-     * on hex; passing 'palette:secondary' verbatim breaks the renderer. The
-     * palette-ref binding on the source layer is intentionally lost (same
-     * trade-off as the photoshop-paint adoption — refs only survive while
-     * editing inside compose itself). `boundLayerId` opts into round-trip
-     * so subsequent edits in Pattern mode flow back to this layer. */
-    const resolvedColor = resolveColor(layer.color, palette) ?? layer.color
-    const resolvedBg    = layer.bgOn ? (resolveColor(layer.bg, palette) ?? layer.bg) : null
-    loadPattern({
-      shapeId:   layer.shapeId,
-      customSvg: layer.customSvg,
-      cols:      layer.cols,
-      rows:      layer.rows,
-      gap:       layer.gap,
-      padding:   layer.padding,
-      stretch:   layer.stretch,
-      overflow:  layer.overflow,
-      color:     resolvedColor,
-      bg:        resolvedBg,
-      rules:     layer.rules ?? [],
-    }, { boundLayerId: layer.id })
-    navigate('/editor/pattern')
-  }
-
   const onFlatten = () => flattenPattern(layer.id)
 
   return (
@@ -440,20 +289,7 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
             </LabeledControl>
           )}
 
-          <div className="grid grid-cols-2 gap-2">
-            <EditorButton variant="primary" size="sm" className="w-full" onClick={randomizeRules}>
-              Randomize rules
-            </EditorButton>
-            <EditorButton variant="primary" size="sm" className="w-full" onClick={onSave} title="Save current pattern params to the shared library">
-              Save to library
-            </EditorButton>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-fg-08">
-            <EditorButton variant="secondary" size="sm" className="w-full" onClick={onEditInPatternMode}
-              title="Open this layer's params in Pattern mode for richer editing">
-              Pattern mode
-            </EditorButton>
+          <div className="pt-2 border-t border-fg-08">
             <EditorButton variant="secondary" size="sm" className="w-full" onClick={onFlatten}
               title="Flatten the pattern to static SVG shapes (one-way)">
               Flatten
@@ -463,26 +299,7 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
       )}
 
       {tab === 'style' && (
-        <>
-          <AutoControls schema={PATTERN_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />
-
-          <LabeledControl label={`Rules · ${rules.length}`}>
-            <div className="flex flex-col gap-2">
-              {rules.map((rule, i) => (
-                <RuleRow
-                  key={rule.id}
-                  rule={rule}
-                  onChange={(updated) => updateRule(i, updated)}
-                  onRemove={() => removeRule(i)}
-                  onReroll={() => rerollRule(i)}
-                />
-              ))}
-              <EditorButton variant="primary" size="sm" iconLeft="plus" onClick={addRule}>
-                Add rule
-              </EditorButton>
-            </div>
-          </LabeledControl>
-        </>
+        <p className="kol-helper-12 text-meta">Pattern styling lives in the Pattern tab.</p>
       )}
 
       {tab === 'anim' && (
@@ -493,39 +310,18 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
 }
 
 /**
- * TextFields — full Type Lab typography surface for the selected text layer.
+ * TextFields — the text layer's NON-styling remainder. Typography styling
+ * (width/weight/case/italic/align/metrics) lives in the Text tab (TextPanel)
+ * — one home per control; Style here keeps the Content field.
  *
  * Optional "Saved as" picker reads from the shared library's `type` slot
  * (saves from Type Lab). Picking a spec copies its typography fields into
- * the layer (no live link — layer stays self-contained). Picker + actions
- * live in Generate; typography params in Style.
+ * the layer (no live link — layer stays self-contained).
  */
 function TextFields({ layer, setProp, updateLayer, palette, renderAnimate, tab }) {
   const { library } = useGeneratorLibrary()
   const { flattenText } = useComposeState()
-  const { loadType } = useTypeState()
-  const navigate = useNavigate()
   const specs = library.type ?? []
-
-  const onEditInTypeMode = () => {
-    /* Resolve palette refs to literal hex on entry (same trade-off as
-     * Pattern mode's "Edit in"). `boundLayerId: layer.id` makes the new
-     * frame's id match the layer so updateFrame round-trips back. */
-    const resolvedColor = resolveColor(layer.color, palette) ?? layer.color
-    loadType({
-      text:       layer.text,
-      width:      layer.width,
-      weight:     layer.weight,
-      italic:     layer.italic,
-      size:       layer.size,
-      tracking:   layer.tracking,
-      lineHeight: layer.lineHeight,
-      case:       layer.case,
-      color:      resolvedColor,
-      textAlign:  layer.textAlign,
-    }, { boundLayerId: layer.id })
-    navigate('/editor/type')
-  }
 
   const onFlatten = () => flattenText(layer.id)
   const specOptions = [
@@ -566,21 +362,15 @@ function TextFields({ layer, setProp, updateLayer, palette, renderAnimate, tab }
             </LabeledControl>
           )}
 
-          <div className="grid grid-cols-2 gap-2">
-            <EditorButton variant="secondary" size="sm" className="w-full" onClick={onEditInTypeMode}
-              title="Open this layer's spec in Type mode as a new frame">
-              Type mode
-            </EditorButton>
-            <EditorButton variant="secondary" size="sm" className="w-full" onClick={onFlatten}
-              title="Flatten the text to glyph-outline shapes (one-way)">
-              Flatten
-            </EditorButton>
-          </div>
+          <EditorButton variant="secondary" size="sm" className="w-full" onClick={onFlatten}
+            title="Flatten the text to glyph-outline shapes (one-way)">
+            Flatten
+          </EditorButton>
         </>
       )}
 
       {tab === 'style' && (
-        <AutoControls schema={TEXT_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />
+        <AutoControls schema={TEXT_PARAMS_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />
       )}
 
       {tab === 'anim' && (

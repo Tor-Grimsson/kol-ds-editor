@@ -1,41 +1,56 @@
-import { useParams, Navigate } from 'react-router-dom'
-import usePageTitle from '../components/hooks/usePageTitle'
 import EditorErrorBoundary from './EditorErrorBoundary'
 import { ToolProvider }       from './state/tools'
+import { GeneratorLibraryProvider } from './library/LibraryProvider'
 import { useGlobalShortcuts } from './state/useGlobalShortcuts'
-import './registry/modes'      // side-effect: registers the mode features
-import { getFeatures, getFeature } from './registry/features'
+import { ComposeStateProvider } from './compose/state'
+import { PaletteStateProvider } from './modes/palette/state'
+import { PatternStateProvider } from './modes/pattern/state'
+import { TypeStateProvider }    from './modes/type/state'
+import PaletteModal from './color/PaletteModal.jsx'
+import Compose from '../pages/Compose'
 
 /**
- * Editor — `/editor/:mode` route component.
+ * Editor — the whole app, mounted at `/`.
  *
- * Mounts every feature's state provider once (order = registration order,
- * outermost first), then dispatches to the active feature's body. Providers
- * stay mounted so state persists across mode switches. The mode list is the
- * feature registry — no hardcoded switch/title map here.
+ * Always renders the compose body. The palette / pattern / type state
+ * providers stay mounted (nesting order preserved from the old registry:
+ * ToolProvider > Compose > Palette > Pattern > Type) — the color modal and
+ * library flows read palette state, and pattern / type state can still back
+ * library items. PaletteModal (the palette generator; NOT color/ColorModal,
+ * which is the per-layer color panel in the left rail) mounts inside the
+ * stack so it sees palette + compose state; opens on `kol:open-color-modal`.
  */
-function ActiveMode() {
-  const { mode } = useParams()
-  const feature = getFeature(mode)
-  usePageTitle(feature?.title ?? 'Editor')
-  /* Cross-mode shortcuts (undo / redo / deselect) — mounted at the route
-   * level so palette / pattern / type modes get keyboard too, not just
-   * Compose's CanvasArea. */
+function EditorBody() {
+  /* Global shortcuts (undo / redo / deselect) — mounted here so keyboard
+   * works everywhere, not just inside CanvasArea. */
   useGlobalShortcuts()
-  if (!feature?.Body) return <Navigate to="/editor/compose" replace />
-  const Body = feature.Body
-  return <Body />
+  return (
+    <>
+      <Compose />
+      <PaletteModal />
+    </>
+  )
 }
 
 export default function Editor() {
-  /* Wrap ActiveMode in each feature's provider, outermost = first registered. */
-  const tree = getFeatures().reduceRight(
-    (children, f) => (f.Provider ? <f.Provider>{children}</f.Provider> : children),
-    <ActiveMode />,
-  )
   return (
     <EditorErrorBoundary>
-      <ToolProvider>{tree}</ToolProvider>
+      {/* Library outermost — MenuTop (File > Open) and every save-to-library
+       * flow read it; it was exported but mounted nowhere, so all of those
+       * silently no-opped against the empty fallback. */}
+      <GeneratorLibraryProvider>
+        <ToolProvider>
+          <ComposeStateProvider>
+            <PaletteStateProvider>
+              <PatternStateProvider>
+                <TypeStateProvider>
+                  <EditorBody />
+                </TypeStateProvider>
+              </PatternStateProvider>
+            </PaletteStateProvider>
+          </ComposeStateProvider>
+        </ToolProvider>
+      </GeneratorLibraryProvider>
     </EditorErrorBoundary>
   )
 }
