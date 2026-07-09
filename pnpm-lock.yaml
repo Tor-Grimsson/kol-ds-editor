@@ -52,8 +52,8 @@ importers:
         specifier: ^0.2.1
         version: 0.2.1(framer-motion@12.42.2(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(gsap@3.15.0)(hls.js@1.6.16)(opentype.js@2.0.0)(react-dom@19.2.7(react@19.2.7))(react-router-dom@7.18.1(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       '@kolkrabbi/kol-icons':
-        specifier: ^0.4.0
-        version: 0.4.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+        specifier: ^0.5.0
+        version: 0.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       '@kolkrabbi/kol-theme':
         specifier: ^0.6.0
         version: 0.6.0
@@ -226,13 +226,6 @@ packages:
       react: ^18.3.0 || ^19.0.0
       react-dom: ^18.3.0 || ^19.0.0
       react-router-dom: ^6.0.0 || ^7.0.0
-
-  '@kolkrabbi/kol-icons@0.4.0':
-    resolution: {integrity: sha512-kjmuCAz2no3TTzNPZi8I/cF3L6vHe3VBDbPKj6L91Ag2L2dxvZk8/tSEr4+01hI1u/diFuiR/IoSoEQzVe7afQ==}
-    hasBin: true
-    peerDependencies:
-      react: ^18.3.0 || ^19.0.0
-      react-dom: ^18.3.0 || ^19.0.0
 
   '@kolkrabbi/kol-icons@0.5.0':
     resolution: {integrity: sha512-1zcyARot+mCt40OX4pYKUsPJm5cc0zCpjUBdxccaFwvo0yKJxZMVwd+mzBZ8eP3+yyrNY1zWso4IYggZ/EOWFg==}
@@ -1268,11 +1261,6 @@ snapshots:
       - gsap
       - hls.js
       - opentype.js
-
-  '@kolkrabbi/kol-icons@0.4.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
-    dependencies:
-      react: 19.2.7
-      react-dom: 19.2.7(react@19.2.7)
 
   '@kolkrabbi/kol-icons@0.5.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)':
     dependencies:
