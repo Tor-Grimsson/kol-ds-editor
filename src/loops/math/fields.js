@@ -1,4 +1,6 @@
-import { mulberry32 } from './rng.js'
+import { mulberry32 } from '../gl/rng.js'
+import { compileSlot } from './mathfn.js'
+import { drawAxes2D, AXIS_2D_OPTIONS } from './axes.js'
 
 // Fields (ported from kol-labs-single math/fields: render.js + the
 // FieldsEditor.jsx draw loop). Two render kinds behind one loop, like the
@@ -9,9 +11,16 @@ import { mulberry32 } from './rng.js'
 //                    animated by hue/ring phase, whole-field spin + zoom breathe
 //
 // PURE IN u. What changed vs labs:
-//   • compileVars expression evaluation did NOT come along — f(x,y) is a select
-//     over the labs SCALAR_EXPRS, frozen to plain JS (the surface-port idiom).
+//   • f(x,y) is a select over the labs SCALAR_EXPRS frozen to plain JS PLUS
+//     'Custom…' — a free-text expression compiled by ./mathfn.js (hardened
+//     compileVars). Compiled over (x,y) only: labs also bound t, but here the
+//     heatmap + streamlines are precomputed caches, so a time-varying field
+//     can't ride them — t-dependence stays a surface-loop feature. While a
+//     custom string doesn't compile the slot keeps the last good fn.
 //     The complex f(z) maps were already frozen JS (render.js COMPLEX_FUNCS).
+//   • View pan: labs' drag-pan (FieldsEditor cx/cy) came along as centerX/
+//     centerY PARAMS on both kinds — the pointer-pan gesture itself is editor
+//     chrome, out of scope here.
 //   • The labs particles were ADVECTED state (integrated per rAF frame, random
 //     respawn). Here each particle's whole STREAMLINE is integrated once at
 //     model build (memoized), and the particle replays it as a function of u —
@@ -37,7 +46,28 @@ export const FIELD_FN_OPTIONS = [
   { value: 'sinsum', label: 'sin 1.5x + cos 1.5y', fn: (x, y) => Math.sin(x * 1.5) + Math.cos(y * 1.5) },
   { value: 'vortex', label: 'θ + r', fn: (x, y) => Math.atan2(y, x) + Math.hypot(x, y) },
 ]
-const fieldFn = (id) => (FIELD_FN_OPTIONS.find((f) => f.value === id) || FIELD_FN_OPTIONS[0]).fn
+// Labs SCALAR_EXPRS, verbatim — quick-fill list for the custom expression
+// (the text param carries one as its placeholder).
+export const FIELD_EXPR_EXAMPLES = [
+  'sin(x)*cos(y)',
+  'sin(hypot(x,y)*2)',
+  'x*x - y*y',
+  'sin(x*1.5) + cos(y*1.5)',
+  'atan2(y,x) + hypot(x,y)',
+]
+
+// f(x,y) for the frame: frozen select fn, or the compiled custom expression.
+// Slot keyed per layer so two custom-field layers don't share a last-good fn.
+const fieldFn = (p) => {
+  if (p.fn === 'custom') {
+    const cf = compileSlot(`math-field:${p.id ?? ''}:expr`, p.expr, ['x', 'y'])
+    return cf || FIELD_FN_OPTIONS[0].fn // never compiled yet — visible fallback
+  }
+  return (FIELD_FN_OPTIONS.find((f) => f.value === p.fn) || FIELD_FN_OPTIONS[0]).fn
+}
+// Cache-key fragment for anything derived from f — a custom layer's caches
+// must key on the expression text (and layer, for last-good divergence).
+const fnKey = (p) => (p.fn === 'custom' ? `custom:${p.id ?? ''}:${p.expr ?? ''}` : p.fn)
 
 // ── Complex arithmetic + curated f(z) maps (verbatim from labs render.js).
 const C = {
@@ -94,23 +124,26 @@ function heatCanvas(w, h, p) {
   const k = Math.min(1, HEAT_CAP / Math.max(w, h))
   const rw = Math.max(1, Math.round(w * k))
   const rh = Math.max(1, Math.round(h * k))
-  const key = `${p.fn}|${p.range}|${p.low}|${p.high}|${rw}x${rh}`
+  const key = `${fnKey(p)}|${p.range}|${p.cx || 0}|${p.cy || 0}|${p.low}|${p.high}|${rw}x${rh}`
   if (heat && heat.key === key) return heat.canvas
   const canvas = heat?.canvas || document.createElement('canvas')
   canvas.width = rw
   canvas.height = rh
   const bctx = canvas.getContext('2d')
-  // labs paintHeat, verbatim: value ramp low→high over the sampled min/max.
-  const f = fieldFn(p.fn)
+  // labs paintHeat, verbatim: value ramp low→high over the sampled min/max,
+  // sampled about the pan center (cx, cy).
+  const f = fieldFn(p)
   const range = p.range
+  const cx = p.cx || 0
+  const cy = p.cy || 0
   const vals = new Float64Array(rw * rh)
   let mn = Infinity
   let mx = -Infinity
   const aspect = rh / rw
   for (let py = 0; py < rh; py++) {
-    const y = -(py / rh - 0.5) * range * aspect
+    const y = cy - (py / rh - 0.5) * range * aspect
     for (let px = 0; px < rw; px++) {
-      const x = (px / rw - 0.5) * range
+      const x = cx + (px / rw - 0.5) * range
       let v = f(x, y)
       if (!Number.isFinite(v)) v = 0
       vals[py * rw + px] = v
@@ -141,8 +174,10 @@ function heatCanvas(w, h, p) {
 // K whole traversals per loop; position at u = path[frac(o + u·K)·len].
 function makeStreamlines(p, aspect) {
   const rng = mulberry32((p.seed ?? 1) >>> 0)
-  const f = fieldFn(p.fn)
+  const f = fieldFn(p)
   const range = p.range
+  const cx = p.cx || 0
+  const cy = p.cy || 0
   const halfH = (range * aspect) / 2
   const eps = range * 0.003
   const speed = Math.max(0.05, p.flowSpeed ?? 1)
@@ -153,8 +188,8 @@ function makeStreamlines(p, aspect) {
   const N = Math.max(1, Math.round(p.count ?? 700))
   const parts = []
   for (let i = 0; i < N; i++) {
-    let x = (rng() - 0.5) * range
-    let y = (rng() - 0.5) * halfH * 2
+    let x = cx + (rng() - 0.5) * range
+    let y = cy + (rng() - 0.5) * halfH * 2
     const K = 3 + Math.floor(rng() * 4) // whole traversals per loop ⇒ seamless
     const L = Math.min(200, Math.round((60 * DURATION) / K)) // labs life ≈ frames
     const pts = new Float64Array((L + 1) * 2)
@@ -171,7 +206,7 @@ function makeStreamlines(p, aspect) {
       const m = Math.hypot(ux, vy) || 1
       x += (ux / m) * step
       y += (vy / m) * step
-      if (!Number.isFinite(x) || Math.abs(x) > range / 2 || Math.abs(y) > halfH) break
+      if (!Number.isFinite(x) || Math.abs(x - cx) > range / 2 || Math.abs(y - cy) > halfH) break
       pts[n * 2] = x
       pts[n * 2 + 1] = y
       n++
@@ -184,7 +219,7 @@ function makeStreamlines(p, aspect) {
 const STREAMS = new Map()
 function getStreamlines(p, w, h) {
   const aspect = Math.round((h / w) * 100) / 100
-  const sig = [p.fn, p.range, p.count, p.seed, p.flowSpeed, p.swirl, p.drift, p.driftDir, aspect].join('|')
+  const sig = [fnKey(p), p.range, p.cx || 0, p.cy || 0, p.count, p.seed, p.flowSpeed, p.swirl, p.drift, p.driftDir, aspect].join('|')
   let m = STREAMS.get(sig)
   if (!m) {
     m = makeStreamlines(p, aspect)
@@ -201,19 +236,21 @@ function complexField(w, h, p) {
   const k = Math.min(1, COMPLEX_CAP / Math.max(w, h))
   const rw = Math.max(1, Math.round(w * k))
   const rh = Math.max(1, Math.round(h * k))
-  const key = `${p.funcId}|${p.range}|${rw}x${rh}`
+  const key = `${p.funcId}|${p.range}|${p.cx || 0}|${p.cy || 0}|${rw}x${rh}`
   if (cfield && cfield.key === key) return cfield
   const f = complexFn(p.funcId)
+  const cx = p.cx || 0
+  const cy = p.cy || 0
   const n = rw * rh
   const arg = new Float32Array(n)
   const logmod = new Float32Array(n)
   const bad = new Uint8Array(n)
   const aspect = rh / rw
   for (let py = 0; py < rh; py++) {
-    const im = -(py / rh - 0.5) * p.range * aspect
+    const im = cy - (py / rh - 0.5) * p.range * aspect
     const row = py * rw
     for (let px = 0; px < rw; px++) {
-      const re = (px / rw - 0.5) * p.range
+      const re = cx + (px / rw - 0.5) * p.range
       const i = row + px
       let wr = 0
       let wi = 0
@@ -280,10 +317,15 @@ export default {
   duration: DURATION,
   params: [
     { key: 'kind', label: 'Kind', type: 'select', options: [{ value: 'scalar', label: 'Scalar' }, { value: 'complex', label: 'Complex' }], default: 'scalar' },
-    { key: 'fn', label: 'f(x, y)', type: 'select', options: FIELD_FN_OPTIONS.map(({ value, label }) => ({ value, label })), default: 'waves', when: isScalar },
+    { key: 'fn', label: 'f(x, y)', type: 'select', options: [...FIELD_FN_OPTIONS.map(({ value, label }) => ({ value, label })), { value: 'custom', label: 'Custom…' }], default: 'waves', when: isScalar },
+    { key: 'expr', label: 'f(x, y) =', type: 'text', rows: 2, default: FIELD_EXPR_EXAMPLES[0], placeholder: FIELD_EXPR_EXAMPLES[1], when: (l) => isScalar(l) && l.fn === 'custom' },
     { key: 'funcId', label: 'f(z)', type: 'select', options: COMPLEX_FUNCS.map(({ id, label }) => ({ value: id, label })), default: 'z2-1', when: isComplex },
     { key: 'coloring', label: 'Coloring', type: 'select', options: [{ value: 'rings', label: 'Rings' }, { value: 'smooth', label: 'Smooth' }, { value: 'contour', label: 'Contour' }], default: 'rings', when: isComplex },
     { key: 'range', label: 'Range', type: 'range', min: 1, max: 40, step: 0.5, default: 8 },
+    // View pan (labs FieldsEditor drag-pan cx/cy as params) — zoom (range)
+    // stops being the only navigation.
+    { key: 'cx', label: 'Center X', type: 'range', min: -20, max: 20, step: 0.1, default: 0 },
+    { key: 'cy', label: 'Center Y', type: 'range', min: -20, max: 20, step: 0.1, default: 0 },
     { key: 'low', label: 'Low', type: 'color', role: 'bg', default: '#0b1530', when: isScalar },
     { key: 'high', label: 'High', type: 'color', role: 'accent', default: '#ffce54', when: isScalar },
     { key: 'stroke', label: 'Particles', type: 'color', role: 'fg', default: '#ffffff', when: isScalar },
@@ -304,6 +346,10 @@ export default {
     { key: 'jitter', label: 'Jitter', type: 'range', min: 0, max: 1, step: 0.05, default: 0, tab: 'anim', section: 'Form', when: isScalar },
     { key: 'ringSpeed', label: 'Ring speed', type: 'range', min: 0, max: 3, step: 0.1, default: 1, tab: 'anim', section: 'Form', when: isComplex },
     { key: 'shade', label: 'Shade', type: 'range', min: 0, max: 1, step: 0.05, default: 0, tab: 'anim', section: 'Form', when: isComplex },
+    // Reference axes/grid (labs StylePanel AXIS_2D + axes2d.js overlay).
+    { key: 'axes', label: 'Axes', type: 'select', options: AXIS_2D_OPTIONS, default: 'none', section: 'Reference' },
+    { key: 'gridColor', label: 'Grid color', type: 'color', role: 'fg', default: '#ffffff', section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
+    { key: 'gridOpacity', label: 'Grid opacity', type: 'range', min: 0, max: 1, step: 0.02, default: 0.12, section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
   ],
   draw(ctx, u, w, h, p) {
     if (p.kind === 'complex') {
@@ -335,18 +381,22 @@ export default {
       } else {
         ctx.drawImage(buf, 0, 0, w, h)
       }
+      drawAxes2D(ctx, w, h, { axis: p.axes, gridColor: p.gridColor, gridOpacity: p.gridOpacity }, { cx: p.cx || 0, cy: p.cy || 0, range: p.range })
       return
     }
 
-    // ── Scalar: blit the cached heatmap, then replay the streamlines.
+    // ── Scalar: blit the cached heatmap, then axes, then the streamlines.
     ctx.drawImage(heatCanvas(w, h, p), 0, 0, w, h)
+    const cx = p.cx || 0
+    const cy = p.cy || 0
+    drawAxes2D(ctx, w, h, { axis: p.axes, gridColor: p.gridColor, gridOpacity: p.gridOpacity }, { cx, cy, range: p.range })
     if (p.flow === false) return
 
     const parts = getStreamlines(p, w, h)
     const range = p.range
     const ppw = w / range
-    const sx = (x) => w / 2 + x * ppw
-    const sy = (y) => h / 2 - y * ppw
+    const sx = (x) => w / 2 + (x - cx) * ppw
+    const sy = (y) => h / 2 - (y - cy) * ppw
     const pulseCyc = Math.round(2 * DURATION / TAU)
     const widthPulse = 1 + (p.pulse || 0) * Math.sin(u * TAU * pulseCyc)
     const jitAmp = (p.jitter || 0) * range * 0.01

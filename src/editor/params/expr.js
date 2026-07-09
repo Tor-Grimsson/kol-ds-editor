@@ -65,6 +65,19 @@ const PRELUDE = `
 const cache = new Map()
 const LIVE_RE = /\b(level|bass|mid|high|rand)\b/
 
+/* Dangerous globals shadowed as never-passed parameters (bound to
+ * undefined) so an expression string — possibly arriving in a loaded/
+ * shared settings .json — can't reach the network, DOM, or storage.
+ * `eval` and `import` are reserved words in strict code and cannot be
+ * shadowed; the Math scope PRELUDE exposes stays intact. */
+// ponytail: scope-shadowing, not a real sandbox (constructor chains still escape); upgrade path = SES/worker isolation.
+const SHADOWED_GLOBALS = [
+  'globalThis', 'window', 'self', 'document', 'fetch', 'XMLHttpRequest',
+  'localStorage', 'sessionStorage', 'indexedDB', 'navigator', 'location',
+  'top', 'parent', 'frames', 'opener', 'Function', 'WebSocket', 'Worker',
+  'importScripts',
+]
+
 /**
  * Compile an expression string. Cached by string. Returns
  * { ok, usesLive, fn }:
@@ -83,7 +96,7 @@ export function compileExpr(str) {
   try {
     // `a` carries the live audio bands (level/bass/mid/high); see PRELUDE.
     // eslint-disable-next-line no-new-func
-    const raw = new Function('t', 'a', `${PRELUDE}return (${key});`)
+    const raw = new Function('t', 'a', ...SHADOWED_GLOBALS, `${PRELUDE}return (${key});`)
     /* Probe at t=1 with silent audio — rejects strings that parse but don't
      * evaluate to a number, so half-typed input degrades to ok:false. */
     const probe = raw(1, ZERO_AUDIO)

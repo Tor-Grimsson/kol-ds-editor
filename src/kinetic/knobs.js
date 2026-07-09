@@ -19,7 +19,7 @@
 // `rMin`/`rMax` bound randomise rolls tighter than the slider range;
 // `noRandom` opts a knob out entirely (colors, font, text-shaped choices).
 
-import { FONT_OPTIONS, fontByKey } from './fonts.js'
+import { FONT_OPTIONS, AXIS_LABELS, fontByKey } from './fonts.js'
 import { normalizeVf } from './presets.js'
 import { CURVE_OPTIONS, MORPH_MODE_OPTIONS } from './morph.js'
 
@@ -67,6 +67,34 @@ const setMorphAxis = (c, tag, v, i = 0) => {
   const clamped = a ? Math.min(a.max, Math.max(a.min, v)) : v
   return patchMorphVf2(c, tag, Math.round(clamped), i)
 }
+// Static VF axis write — inst.vf[tag], clamped to the instance font's real
+// fvar range (read from the fonts.js registry, itself read off the ttfs).
+const setVfAxis = (c, tag, v, i = 0) => {
+  const a = axisOf(c, tag, i)
+  const clamped = a ? Math.min(a.max, Math.max(a.min, v)) : v
+  return patchInst(c, { vf: { ...(inst(c, i)?.vf ?? {}), [tag]: Math.round(clamped) } }, i)
+}
+// One VF-axis knob per tag the shipped fonts expose. min/max are FUNCTIONS of
+// (comp, i) — the slider range follows the selected instance's font (rot wght
+// 100..900 vs malromur/gullhamrar 300..900); knobRange() resolves them.
+const vfAxisKnob = (tag) => ({
+  key: `vf${tag[0].toUpperCase()}${tag.slice(1)}`, label: AXIS_LABELS[tag] || tag,
+  tab: 'style', section: 'Axes', type: 'range', step: 1,
+  min: (c, i = 0) => axisOf(c, tag, i)?.min ?? 0,
+  max: (c, i = 0) => axisOf(c, tag, i)?.max ?? 1000,
+  when: (c, i = 0) => !!axisOf(c, tag, i),
+  get: (c, i = 0) => inst(c, i)?.vf?.[tag] ?? axisOf(c, tag, i)?.def ?? 0,
+  set: (c, v, i = 0) => setVfAxis(c, tag, v, i),
+})
+// morph-gate helpers for the custom-curve control points
+const customCurve = (c, i = 0) => morphOn(c, i) && morphMode(c, i) === 'morph' && (morph(c, i).curve ?? 'flat') === 'custom'
+const cpKnob = (pt, axis) => ({
+  key: `morphC${pt}${axis}`, label: `P${pt} ${axis.toUpperCase()}`,
+  tab: 'style', section: 'Morph', type: 'range', min: 0, max: 1, step: 0.01, noRandom: true,
+  when: customCurve,
+  get: (c, i = 0) => morph(c, i)[`cp${pt}`]?.[axis] ?? (pt === 1 ? 0.33 : 0.66),
+  set: (c, v, i = 0) => patchMorph(c, { [`cp${pt}`]: { ...(morph(c, i)[`cp${pt}`] ?? { x: pt === 1 ? 0.33 : 0.66, y: pt === 1 ? 0.33 : 0.66 }), [axis]: v } }, i),
+})
 
 export const KINETIC_KNOBS = [
   // ── Style ──
@@ -87,9 +115,9 @@ export const KINETIC_KNOBS = [
       { value: 'title', label: 'Tt' },
     ],
     get: (c, i = 0) => inst(c, i)?.case ?? 'none', set: (c, v, i = 0) => patchInst(c, { case: v }, i) },
-  { key: 'fontSize', label: 'Font size', tab: 'style', type: 'range', min: 8, max: 220, step: 1, rMin: 36, rMax: 150,
+  { key: 'fontSize', label: 'Font size', tab: 'style', type: 'range', min: 8, max: 1200, step: 1, rMin: 36, rMax: 150,
     get: (c, i = 0) => inst(c, i)?.fontSize ?? 26, set: (c, v, i = 0) => patchInst(c, { fontSize: Math.round(v) }, i) },
-  { key: 'letterSpacing', label: 'Letter spacing', tab: 'style', type: 'range', min: -10, max: 40, step: 0.5, rMin: 0, rMax: 12,
+  { key: 'letterSpacing', label: 'Letter spacing', tab: 'style', type: 'range', min: -10, max: 400, step: 0.5, rMin: 0, rMax: 12,
     get: (c, i = 0) => inst(c, i)?.letterSpacing ?? 0, set: (c, v, i = 0) => patchInst(c, { letterSpacing: v }, i) },
   { key: 'align', label: 'Align', tab: 'style', type: 'select', noRandom: true, when: onPath, options: [
       { value: 'start',  label: 'Start' },
@@ -97,8 +125,14 @@ export const KINETIC_KNOBS = [
       { value: 'end',    label: 'End' },
     ],
     get: (c, i = 0) => inst(c, i)?.align ?? 'center', set: (c, v, i = 0) => patchInst(c, { align: v }, i) },
-  { key: 'multiply', label: 'Copies', tab: 'style', type: 'range', min: 1, max: 6, step: 1, noRandom: true, when: onPath,
+  { key: 'multiply', label: 'Copies', tab: 'style', type: 'range', min: 1, max: 24, step: 1, noRandom: true, when: onPath,
     get: (c, i = 0) => inst(c, i)?.multiply ?? 1, set: (c, v, i = 0) => patchInst(c, { multiply: Math.round(v) }, i) },
+
+  // ── Style · Axes — the instance's STATIC variable-font coords (labs
+  // EditControls' Axes section). One slider per fvar axis; ranges come from
+  // the font registry via the function min/max, writes clamp per-font. ──
+  vfAxisKnob('wdth'),
+  vfAxisKnob('wght'),
 
   // ── Style · arrangement (type + when-gated per-type params) ──
   { key: 'arrangement', label: 'Arrangement', tab: 'style', section: 'Arrangement', type: 'select', noRandom: true,
@@ -140,6 +174,23 @@ export const KINETIC_KNOBS = [
   { key: 'cols', label: 'Columns', tab: 'style', section: 'Arrangement', type: 'range', min: 1, max: 8, step: 1, rMin: 2, rMax: 6,
     when: (c, i = 0) => ptype(c, i) === 'array',
     get: (c, i = 0) => inst(c, i)?.path?.cols ?? 3, set: (c, v, i = 0) => patchPath(c, { cols: Math.round(v) }, i) },
+  // 'flow' lets type run past an open path's ends (poster bleed); 'contain'
+  // clamps it inside the frame (labs' Paragraph toggle). Engine reads both.
+  { key: 'flow', label: 'Paragraph', tab: 'style', section: 'Arrangement', type: 'select', noRandom: true, when: onPath,
+    options: [{ value: 'flow', label: 'Flow' }, { value: 'contain', label: 'Contain' }],
+    get: (c, i = 0) => inst(c, i)?.flow ?? 'flow', set: (c, v, i = 0) => patchInst(c, { flow: v }, i) },
+  { key: 'showPath', label: 'Show path', tab: 'style', section: 'Arrangement', type: 'select', noRandom: true, when: onPath,
+    options: [{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }],
+    get: (c, i = 0) => (inst(c, i)?.showPath ? 'on' : 'off'), set: (c, v, i = 0) => patchInst(c, { showPath: v === 'on' }, i) },
+
+  // ── Style · Position — the instance's normalized offset from the frame
+  // centre (labs PathControls' Position sliders; engine `offset` field). ──
+  { key: 'offsetX', label: 'X', tab: 'style', section: 'Position', type: 'range', min: -1, max: 1, step: 0.01, noRandom: true,
+    get: (c, i = 0) => inst(c, i)?.offset?.x ?? 0,
+    set: (c, v, i = 0) => patchInst(c, { offset: { ...(inst(c, i)?.offset ?? {}), x: v } }, i) },
+  { key: 'offsetY', label: 'Y', tab: 'style', section: 'Position', type: 'range', min: -1, max: 1, step: 0.01, noRandom: true,
+    get: (c, i = 0) => inst(c, i)?.offset?.y ?? 0,
+    set: (c, v, i = 0) => patchInst(c, { offset: { ...(inst(c, i)?.offset ?? {}), y: v } }, i) },
 
   // ── Style · Morph (glyph-outline interpolation — the "morph monster").
   // Gates follow the labs MorphPanel exactly: the whole section needs a
@@ -167,6 +218,9 @@ export const KINETIC_KNOBS = [
   { key: 'morphCurve', label: 'Curve', tab: 'style', section: 'Morph', type: 'select',
     when: (c, i = 0) => morphOn(c, i) && morphMode(c, i) === 'morph', options: CURVE_OPTIONS,
     get: (c, i = 0) => morph(c, i).curve ?? 'flat', set: (c, v, i = 0) => patchMorph(c, { curve: v }, i) },
+  // custom-curve control points — the rail-slider port of labs' on-canvas
+  // bézier drag (cp1/cp2 already honored by curveBlend for hand-authored comps)
+  cpKnob(1, 'x'), cpKnob(1, 'y'), cpKnob(2, 'x'), cpKnob(2, 'y'),
   { key: 'morphBlend', label: 'Blend', tab: 'style', section: 'Morph', type: 'range', min: 0, max: 1, step: 0.01,
     when: (c, i = 0) => morphOn(c, i) && morphMode(c, i) !== 'random',
     get: (c, i = 0) => morph(c, i).blend ?? 0.5, set: (c, v, i = 0) => patchMorph(c, { blend: v }, i) },
@@ -199,7 +253,7 @@ export const KINETIC_KNOBS = [
   { key: 'axis', label: 'Axis', tab: 'anim', type: 'select',
     when: (c, i = 0) => ['vfwave', 'sweepWeight'].includes(mode(c, i)) && fontByKey(inst(c, i)?.font).axes.length > 1,
     options: (c, i = 0) => fontByKey(inst(c, i)?.font).axes.map((a) => ({
-      value: a.tag, label: a.tag === 'wght' ? 'Weight' : a.tag === 'wdth' ? 'Width' : a.tag })),
+      value: a.tag, label: AXIS_LABELS[a.tag] || a.tag })),
     get: (c, i = 0) => inst(c, i)?.motion?.axis ?? 'wght', set: (c, v, i = 0) => patchMotion(c, { axis: v }, i) },
   { key: 'field', label: 'Field', tab: 'anim', type: 'select',
     when: (c, i = 0) => ['sweep', 'sweepWeight', 'sweepShift'].includes(mode(c, i)), options: [
@@ -226,23 +280,32 @@ export const KINETIC_KNOBS = [
 // options may be static or a fn of the comp + selected index (e.g. the font's axes).
 export const knobOptions = (k, comp, i = 0) => (typeof k.options === 'function' ? k.options(comp, i) : k.options ?? [])
 
+// min/max may be static or a fn of the comp + selected index (the VF axis
+// knobs track the instance font's real fvar range). → { min, max }
+export const knobRange = (k, comp, i = 0) => ({
+  min: typeof k.min === 'function' ? k.min(comp, i) : k.min,
+  max: typeof k.max === 'function' ? k.max(comp, i) : k.max,
+})
+
 // Roll every randomisable knob currently in play for instance `i` (when-gates
 // evaluated against the progressively patched comp) — the LoopFields
-// randomise idiom, comp-native.
-export function randomiseComp(comp, i = 0) {
+// randomise idiom, comp-native. `rng` is a 0..1 source (pass a seeded
+// mulberry32 stream for reproducible rolls; defaults to Math.random).
+export function randomiseComp(comp, i = 0, rng = Math.random) {
   let next = comp
   for (const k of KINETIC_KNOBS) {
     if (k.noRandom || k.type === 'color') continue
     if (k.when && !k.when(next, i)) continue
     if (k.type === 'range') {
-      const lo = k.rMin ?? k.min
-      const hi = k.rMax ?? k.max
+      const r = knobRange(k, next, i)
+      const lo = k.rMin ?? r.min
+      const hi = k.rMax ?? r.max
       const step = k.step ?? 1
-      const raw = lo + Math.random() * (hi - lo)
+      const raw = lo + rng() * (hi - lo)
       next = k.set(next, Math.min(hi, Math.max(lo, Number((Math.round(raw / step) * step).toFixed(4)))), i)
     } else if (k.type === 'select') {
       const opts = knobOptions(k, next, i)
-      if (opts.length) next = k.set(next, opts[Math.floor(Math.random() * opts.length)].value, i)
+      if (opts.length) next = k.set(next, opts[Math.floor(rng() * opts.length)].value, i)
     }
   }
   return next

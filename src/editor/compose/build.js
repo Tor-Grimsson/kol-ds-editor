@@ -27,8 +27,11 @@ import { regularPolygonPoints, starPoints, trianglePoints } from './shape-math'
 import { pathD } from './path-math'
 import { computeBooleanCached } from './boolean-ops'
 import { loopById, loopDrawParams } from '../../loops/registry'
+import { drawLoopFrame } from '../../loops/lib/viewport'
+import { hasEnabledFilters } from './filterChain'
 import { transport } from '../params/transport'
 import { kineticFontCss } from '../../kinetic/fonts'
+import { downloadBlob } from '../lib/download'
 
 const LOGO_RAW = {
   logomark:      logomarkRaw,
@@ -114,41 +117,58 @@ function patternLayerSvg(layer, palette, w, h, idx) {
   })
   const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(tile)}`
   const id = `kol-compose-pattern-${idx}`
-  const def = `<pattern id="${id}" x="0" y="0" width="${scale}" height="${scale}" patternUnits="userSpaceOnUse"><image href="${dataUrl}" x="0" y="0" width="${scale}" height="${scale}"/></pattern>`
   /* Phase 1b: positioned. Defensive defaults fall back to full-canvas for
    * any pre-1b data lacking bounds. */
   const lx = layer.x ?? 0
   const ly = layer.y ?? 0
   const lw = layer.w ?? w
   const lh = layer.h ?? h
+  /* Tile phase anchors at the LAYER origin — the DOM renderer paints via
+   * background-repeat on the layer's own box (background-position 0 0), so
+   * tiles start at its top-left, not the canvas origin. */
+  const def = `<pattern id="${id}" x="${lx}" y="${ly}" width="${scale}" height="${scale}" patternUnits="userSpaceOnUse"><image href="${dataUrl}" x="0" y="0" width="${scale}" height="${scale}"/></pattern>`
   const fill = `<rect x="${lx}" y="${ly}" width="${lw}" height="${lh}" fill="url(#${id})"/>`
   return { def, body: fill }
 }
 
-function photoLayerSvg(layer, w, h, idx, defs) {
+function photoLayerSvg(layer, w, h, idx, defs, snapScale) {
   if (!layer.src) return ''
   const lx = layer.x ?? 0
   const ly = layer.y ?? 0
   const lw = layer.w ?? w
   const lh = layer.h ?? h
-  /* Filtered photo — snapshot the LIVE filter canvas (same idiom as engine
-   * loops): the DOM renderer owns the pixels; re-running a filter offscreen
-   * would duplicate sim state (dither free-runs). Falls through to the plain
-   * photo paths when no canvas is mounted (crop active renders as <img>). */
-  if (layer.filterId && layer.imgW == null && typeof document !== 'undefined') {
+  /* Filtered photo — snapshot the LIVE filter-chain canvas (same idiom as
+   * engine loops): the DOM renderer owns the pixels — the canvas holds the
+   * full chained result (canvas stages + terminal GL stage); re-running a
+   * chain offscreen would duplicate sim state (dither free-runs). Falls
+   * through to the plain photo paths when no canvas is mounted (crop active
+   * renders as <img>). */
+  if (hasEnabledFilters(layer) && layer.imgW == null && typeof document !== 'undefined') {
     const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
     if (live) return `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${lx}" y="${ly}" width="${lw}" height="${lh}"/>`
   }
   /* Unfiltered video — draw the live <video>'s CURRENT frame to a temp
    * canvas (fit-aware) and embed as <image>; SVG can't reference video.
    * Sources are same-origin (/media proxy) or object URLs, so the canvas
-   * stays untainted. Crop never applies to video (gated at entry). */
+   * stays untainted. */
   if (layer.srcType === 'video' && typeof document !== 'undefined') {
     const live = document.querySelector(`video[data-layer-id="${layer.id}"]`)
     if (!live || !live.videoWidth) return ''
+    /* Cropped video — snapshot the frame at its intrinsic size, then emit
+     * a cropped <image> clipped to the frame (mirrors the cropped-photo
+     * branch below, but with a canvas snapshot instead of layer.src). */
+    if (layer.imgW != null && layer.w != null) {
+      const cc = document.createElement('canvas')
+      cc.width = Math.max(1, Math.round(layer.imgW * snapScale))
+      cc.height = Math.max(1, Math.round(layer.imgH * snapScale))
+      cc.getContext('2d').drawImage(live, 0, 0, cc.width, cc.height)
+      const clipId = `kol-crop-${idx}`
+      defs.push(`<clipPath id="${clipId}"><rect x="${lx}" y="${ly}" width="${lw}" height="${lh}"/></clipPath>`)
+      return `<g clip-path="url(#${clipId})"><image href="${escapeXml(cc.toDataURL('image/png'))}" x="${(lx + layer.imgX).toFixed(2)}" y="${(ly + layer.imgY).toFixed(2)}" width="${layer.imgW.toFixed(2)}" height="${layer.imgH.toFixed(2)}" preserveAspectRatio="none"/></g>`
+    }
     const c = document.createElement('canvas')
-    c.width = Math.max(1, Math.round(lw))
-    c.height = Math.max(1, Math.round(lh))
+    c.width = Math.max(1, Math.round(lw * snapScale))
+    c.height = Math.max(1, Math.round(lh * snapScale))
     const g = c.getContext('2d')
     const sw = live.videoWidth
     const sh = live.videoHeight
@@ -352,9 +372,9 @@ function textLayerForeignObject(layer, color, strokeColor, sw) {
 
 /* Loop layer — rasterize the loop's CURRENT frame (transport t) to a data
  * URL and embed as <image>, mirroring the photo path. Vector export of a
- * canvas2d draw fn isn't possible; a 2× raster snapshot matches what the
- * user sees. */
-function loopLayerSvg(layer) {
+ * canvas2d draw fn isn't possible; a snapScale× raster snapshot matches
+ * what the user sees at the export's output resolution. */
+function loopLayerSvg(layer, snapScale) {
   const loop = loopById(layer.loopId)
   if (!loop || typeof document === 'undefined') return ''
   const lw = Math.max(1, layer.w ?? 0)
@@ -370,14 +390,14 @@ function loopLayerSvg(layer) {
     if (!live) return ''
     return `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${x}" y="${y}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
   }
-  const scale = 2
+  const scale = snapScale
   const c = document.createElement('canvas')
   c.width = Math.round(lw * scale)
   c.height = Math.round(lh * scale)
   const g = c.getContext('2d')
   g.scale(scale, scale)
   /* Same bg suppression as the live LoopLayer (fresh canvas → already clear). */
-  loop.draw(g, transport.getT(), lw, lh, loopDrawParams(loop, layer))
+  drawLoopFrame(g, loop, transport.getT(), lw, lh, loopDrawParams(loop, layer))
   return `<image href="${escapeXml(c.toDataURL('image/png'))}" x="${x}" y="${y}" width="${lw.toFixed(2)}" height="${lh.toFixed(2)}"/>`
 }
 
@@ -409,11 +429,11 @@ function kineticLayerSvg(layer) {
 /* Recursive group export: a `<g transform="translate(gx gy)">` containing
  * each child's wrapped body. Children's own x/y/w/h are group-relative;
  * the translate restores canvas-absolute positioning. */
-function groupLayerSvg(layer, palette, w, h, idx, defs) {
+function groupLayerSvg(layer, palette, w, h, idx, defs, snapScale) {
   const gx = layer.x ?? 0
   const gy = layer.y ?? 0
   const childBodies = (layer.children ?? [])
-    .map((child, i) => layerToSvg(child, palette, w, h, `${idx}-${i}`, defs))
+    .map((child, i) => layerToSvg(child, palette, w, h, `${idx}-${i}`, defs, snapScale))
     .filter(Boolean)
     .join('\n')
   if (!childBodies) return ''
@@ -424,13 +444,16 @@ function groupLayerSvg(layer, palette, w, h, idx, defs) {
  * or empty string for invisible / unrenderable layers. Mutates `defs`
  * (pattern layer pushes a `<pattern>` def). Exported — rasterizeLayer (the
  * universal-effects source seam) builds a single-layer SVG from it. */
-export function layerToSvg(layer, palette, w, h, idx, defs) {
-  if (!layer.visible) return ''
-  /* Effected non-photo layer — snapshot the LIVE effect canvas (photo has
-   * its own branch inside photoLayerSvg; loops inside loopLayerSvg). wrap()
-   * below still applies opacity/blend/rotation — the backing store holds
-   * unrotated content. */
-  if (layer.filterId && layer.type !== 'photo' && layer.type !== 'loop' && layer.type !== 'misc' && typeof document !== 'undefined') {
+export function layerToSvg(layer, palette, w, h, idx, defs, snapScale = 2) {
+  if (layer.visible === false) return ''  /* undefined ⇒ visible, like the DOM renderer */
+  /* Effected non-photo layer — snapshot the LIVE effect-chain canvas (photo
+   * has its own branch inside photoLayerSvg). Filtered 2d LOOPS route here
+   * too now: their live canvas holds the chained pixels, while loopLayerSvg
+   * would re-draw the RAW loop and lose the chain (engine loops can't host
+   * filters, so they still fall through to loopLayerSvg's snapshot branch).
+   * wrap() below still applies opacity/blend/rotation — the backing store
+   * holds unrotated content. */
+  if (hasEnabledFilters(layer) && layer.type !== 'photo' && typeof document !== 'undefined') {
     const live = document.querySelector(`canvas[data-layer-id="${layer.id}"]`)
     if (live) {
       const body = `<image href="${escapeXml(live.toDataURL('image/png'))}" x="${(layer.x ?? 0).toFixed(2)}" y="${(layer.y ?? 0).toFixed(2)}" width="${(layer.w ?? 0).toFixed(2)}" height="${(layer.h ?? 0).toFixed(2)}"/>`
@@ -445,14 +468,14 @@ export function layerToSvg(layer, palette, w, h, idx, defs) {
       if (out) { defs.push(out.def); body = out.body }
       break
     }
-    case 'photo':      body = photoLayerSvg(layer, w, h, idx, defs); break
+    case 'photo':      body = photoLayerSvg(layer, w, h, idx, defs, snapScale); break
     case 'shape':      body = shapeLayerSvg(layer, palette); break
     case 'path':       body = pathLayerSvg(layer, palette); break
     case 'bool':       body = boolLayerSvg(layer, palette); break
     case 'text':       body = textLayerSvg(layer, palette); break
-    case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs); break
+    case 'group':      body = groupLayerSvg(layer, palette, w, h, idx, defs, snapScale); break
     case 'loop':
-    case 'misc':       body = loopLayerSvg(layer); break
+    case 'misc':       body = loopLayerSvg(layer, snapScale); break
     case 'kinetic':    body = kineticLayerSvg(layer); break
     default: break
   }
@@ -460,23 +483,31 @@ export function layerToSvg(layer, palette, w, h, idx, defs) {
   return wrap(layer, body)
 }
 
-export function buildLayersSvg({ layers, palette, aspect = '1:1', customRatio = null, canvasW = null, canvasH = null }) {
+export function buildLayersSvg({ layers, palette, aspect = '1:1', customRatio = null, canvasW = null, canvasH = null, rasterScale = 1 }) {
   /* Virtual coordinate space (what layers are positioned in) stays at the
    * 1080-wide baseline; the SVG's width/height carry the real output pixels.
    * viewBox = virtual, so a 1920×1080 export just scales the same geometry —
    * no per-layer coordinate change. Falls back to aspect when no explicit
-   * dimensions are passed (legacy callers). */
+   * dimensions are passed (legacy callers). vh keeps the EXACT quotient —
+   * rounding would drift the viewBox ratio off the output ratio and the
+   * default meet-scaling would paint ~1px transparent gutters in the PNG. */
   const useDims = canvasW > 0 && canvasH > 0
   const vw = CANVAS_W
-  const vh = useDims ? Math.round(CANVAS_W * (canvasH / canvasW)) : aspectToWH(aspect, customRatio).h
+  const vh = useDims ? CANVAS_W * (canvasH / canvasW) : aspectToWH(aspect, customRatio).h
   const outW = useDims ? canvasW : vw
   const outH = useDims ? canvasH : vh
+  /* Snapshot/redraw rasters (2d loops, video frames) bake INSIDE the SVG at
+   * this many device px per virtual unit: output px per unit × the PNG's
+   * @Nx `rasterScale`. Floor 2 keeps the historical 2× loop quality; cap 4
+   * bounds canvas memory on big exports. Live-canvas snapshots (engine
+   * loops, filtered layers) stay at their backing-store resolution. */
+  const snapScale = Math.min(4, Math.max(2, (outW / vw) * rasterScale))
 
   const defs = []
   const bodies = []
 
   layers.forEach((layer, idx) => {
-    const body = layerToSvg(layer, palette, vw, vh, idx, defs)
+    const body = layerToSvg(layer, palette, vw, vh, idx, defs, snapScale)
     if (body) bodies.push(body)
   })
 
@@ -492,40 +523,38 @@ ${bodies.join('\n')}
  * Compositor lab folded into Compose; previously these lived in
  * `compositor/build.js`. */
 export function downloadComposeSvg(svgString, filename) {
-  const blob = new Blob([svgString], { type: 'image/svg+xml' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+  downloadBlob(new Blob([svgString], { type: 'image/svg+xml' }), filename)
+}
+
+/* Rasterize a compose SVG string to a PNG Blob at `scale`× the SVG's own
+ * width/height (the @Nx bump; internal rasters are already baked at rasterScale
+ * inside the SVG). Returns a Promise<Blob> and triggers NO download — the
+ * hook's renderComposePngBlob(aspect, scale) builds the SVG then calls this,
+ * and downloadComposePng wraps it for the single-file path. */
+export function svgToPngBlob(svgString, scale = 1) {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([svgString], { type: 'image/svg+xml' })
+    const url  = URL.createObjectURL(blob)
+    const img  = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width  = (img.width  || 1080) * scale
+      canvas.height = (img.height || 1080) * scale
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+      URL.revokeObjectURL(url)
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) resolve(pngBlob)
+        else reject(new Error('PNG encode failed'))
+      }, 'image/png')
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG rasterize failed')) }
+    img.src = url
+  })
 }
 
 export function downloadComposePng(svgString, filename, scale = 1) {
-  const blob = new Blob([svgString], { type: 'image/svg+xml' })
-  const url  = URL.createObjectURL(blob)
-  const img  = new Image()
-  img.onload = () => {
-    const canvas = document.createElement('canvas')
-    canvas.width  = (img.width  || 1080) * scale
-    canvas.height = (img.height || 1080) * scale
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
-    URL.revokeObjectURL(url)
-    canvas.toBlob((pngBlob) => {
-      if (!pngBlob) return
-      const pngUrl = URL.createObjectURL(pngBlob)
-      const a = document.createElement('a')
-      a.href     = pngUrl
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      URL.revokeObjectURL(pngUrl)
-    }, 'image/png')
-  }
-  img.onerror = () => URL.revokeObjectURL(url)
-  img.src = url
+  svgToPngBlob(svgString, scale)
+    .then((pngBlob) => downloadBlob(pngBlob, filename))
+    .catch(() => {})
 }

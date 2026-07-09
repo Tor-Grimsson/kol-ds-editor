@@ -12,14 +12,16 @@
 // Pure + framework-agnostic (no DOM): returns SVG path `d` strings + advances,
 // which KineticType places onto its paths exactly like the <text> glyphs.
 //
-// Editor adaptation: labs' `custom` curve (an on-canvas drag-a-bezier overlay)
-// is not ported — curveBlend keeps the branch (cp1/cp2 defaults resolve it for
-// hand-authored comps) but CURVE_OPTIONS only lists the named curves.
+// Editor adaptation: labs' `custom` curve is selectable again — cp1/cp2 edit
+// via the rail's XY sliders (KineticPanel) instead of labs' on-canvas
+// drag-a-bezier overlay; curveBlend honors them either way.
 
 import opentype from 'opentype.js'
+import { TAU } from '../loops/lib/util.js'
 
-const TAU = Math.PI * 2
+// generalized (lo, hi) clamp — deliberately not lib/util's fixed clamp01
 export const clamp = (v, lo = 0, hi = 1) => (v < lo ? lo : v > hi ? hi : v)
+// endpoint-exact lerp form (hits b exactly at t = 1) — not lib/util's a + (b−a)·t
 const lerp = (a, b, t) => a * (1 - t) + b * t
 
 // Deterministic 0..1 PRNG (mulberry32) — inlined so the kinetic module stays
@@ -61,7 +63,8 @@ export function ensureGlyphFont(url) {
 }
 
 // ── command helpers (lifted from the brand morph, kept byte-faithful) ────────
-function commandsToPath(cmds) {
+// Exported — buildTypeSvg.js (type-mode export) shares these serializers.
+export function commandsToPath(cmds) {
   const out = []
   for (const c of cmds) {
     switch (c.type) {
@@ -76,13 +79,13 @@ function commandsToPath(cmds) {
   return out.join('')
 }
 
-function commandsMatch(a, b) {
+export function commandsMatch(a, b) {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) if (a[i].type !== b[i].type) return false
   return true
 }
 
-function lerpCommands(a, b, t) {
+export function lerpCommands(a, b, t) {
   return a.map((ca, i) => {
     const cb = b[i]
     const out = { type: ca.type }
@@ -96,7 +99,7 @@ function lerpCommands(a, b, t) {
   })
 }
 
-function commandsBbox(cmds) {
+export function commandsBbox(cmds) {
   let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
   for (const c of cmds) {
     for (const k of ['x', 'x1', 'x2']) if (k in c) { x1 = Math.min(x1, c[k]); x2 = Math.max(x2, c[k]) }
@@ -175,6 +178,7 @@ export const CURVE_OPTIONS = [
   { value: 'expo-out', label: 'Expo out' },
   { value: 'log', label: 'Logarithmic' },
   { value: 'sine', label: 'Sine wave' },
+  { value: 'custom', label: 'Custom (bézier)' },
 ]
 
 export const MORPH_MODE_OPTIONS = [

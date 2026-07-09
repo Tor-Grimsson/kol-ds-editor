@@ -111,9 +111,9 @@
   white-space: nowrap;
   padding: 3px 8px;
   border-radius: 4px;
-  background: var(--kol-surface-secondary, #1A1A1E);
+  background: var(--kol-surface-secondary);
   border: 1px solid var(--kol-fg-08);
-  color: var(--kol-fg-1, #F5F3EF);
+  color: var(--kol-fg-emphasis);
   font-family: var(--kol-font-family-mono);
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -134,6 +134,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Reserve the classic-scrollbar gutter so tab switches that overflow
+     don't reflow the rail content (no-op under overlay scrollbars). */
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
 }
@@ -157,26 +160,6 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-}
-.kol-compose-rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 16px 8px;
-  border-top: 1px solid var(--kol-fg-08);
-}
-/* Suppress border-top for the first panel in a rail body — its top edge
-   meets the topbar's border-bottom, so an extra line would stack. */
-.kol-editor-rail-body > .kol-compose-rail:first-child > .kol-compose-rail-head {
-  border-top: none;
-}
-
-.kol-compose-rail-add {
-  margin-top: auto;
-  padding: 16px;
-  border-top: 1px solid var(--kol-fg-08);
-  display: flex;
-  flex-direction: column;
 }
 
 
@@ -311,8 +294,12 @@
   padding: 20px 16px;
   flex: 1;
   overflow-y: auto;
+  /* Reserve the scrollbar gutter — this is the rail's REAL scroller (the
+     panel bodies are height-clamped, not the outer rail-body), so a tall
+     tab/loop that overflows must not reflow the column when its scrollbar
+     appears. */
+  scrollbar-gutter: stable;
 }
-.kol-compose-placeholder { padding: 0; }
 
 
 /* ───── 5. Canvas patterns ──────────────────────────────────────────── */
@@ -334,25 +321,4 @@
     calc(var(--kol-grid-step) * var(--kol-grid-major-every)) calc(var(--kol-grid-step) * var(--kol-grid-major-every)),
     var(--kol-grid-step) var(--kol-grid-step),
     var(--kol-grid-step) var(--kol-grid-step);
-}
-
-/* Checker pattern — Photoshop-style transparency indicator. Currently
-   unused in the editor (artboard reveals the grid instead) but kept here
-   for any consumer that needs it. */
-.kol-checker {
-  --kol-checker-c1: color-mix(in srgb, var(--kol-surface-on-primary) 8%, var(--kol-surface-primary));
-  --kol-checker-c2: var(--kol-surface-primary);
-  --kol-checker-size: 16px;
-  background-color: var(--kol-checker-c2);
-  background-image:
-    linear-gradient(45deg, var(--kol-checker-c1) 25%, transparent 25%),
-    linear-gradient(-45deg, var(--kol-checker-c1) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, var(--kol-checker-c1) 75%),
-    linear-gradient(-45deg, transparent 75%, var(--kol-checker-c1) 75%);
-  background-size: var(--kol-checker-size) var(--kol-checker-size);
-  background-position:
-    0 0,
-    0 calc(var(--kol-checker-size) / 2),
-    calc(var(--kol-checker-size) / 2) calc(var(--kol-checker-size) / -2),
-    calc(var(--kol-checker-size) / -2) 0;
 }

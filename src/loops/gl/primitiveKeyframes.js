@@ -1,4 +1,5 @@
 import { EASE } from './primitiveEasing.js'
+import { lerp } from '../lib/util.js'
 
 // Keyframe animation track — a PURE sampler so the timeline stays scrubbable
 // (pose derived from the playhead, never accumulated). Keyframes:
@@ -6,7 +7,6 @@ import { EASE } from './primitiveEasing.js'
 // Assumes keyframes are sorted by t (the editor keeps them sorted on add).
 // Easing comes from the shared src/lib/easing.js (EASE + EASE_OPTIONS).
 
-const lerp = (a, b, t) => a + (b - a) * t
 const lerp3 = (A, B, t) => [lerp(A[0], B[0], t), lerp(A[1], B[1], t), lerp(A[2], B[2], t)]
 const pose = (k) => ({ rot: k.rot || [0, 0, 0], pos: k.pos || [0, 0, 0], scale: k.scale ?? 1 })
 

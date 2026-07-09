@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { resolveCssVar } from '../../../components/sections/ColorRamp'
+import { resolveCssVar } from '../../color/cssVar'
 import { useComposeState, resolveColor } from '../../compose/state'
 import { findLayerDeep } from '../../compose/helpers'
 import { DEFAULT_SHAPE_ID, getShapeSvg } from './shapes'

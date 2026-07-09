@@ -28,35 +28,35 @@
     "preview": "vite preview"
   },
   "peerDependencies": {
-    "@kolkrabbi/kol-component": "^0.1.1",
-    "@kolkrabbi/kol-framework": "^0.1.1",
-    "@kolkrabbi/kol-loader": "^0.2.0",
-    "@kolkrabbi/kol-theme": "^0.1.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "react-router-dom": "^7.0.0"
-  },
-  "dependencies": {
     "@kolkrabbi/kol-component": "^0.1.2",
     "@kolkrabbi/kol-framework": "^0.1.2",
-    "@kolkrabbi/kol-loader": "^0.2.0",
+    "@kolkrabbi/kol-icons": "^0.4.0",
     "@kolkrabbi/kol-theme": "^0.1.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "dependencies": {
     "@tailwindcss/vite": "^4.2.4",
     "colord": "^2.9.3",
     "d3-delaunay": "^6.0.4",
     "d3-force": "^3.0.0",
-    "embla-carousel-react": "^8.6.0",
+    "mediabunny": "^1.50.6",
     "opentype.js": "^2.0.0",
     "paper": "^0.12.18",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
-    "react-router-dom": "^7.14.2",
+    "pixi-filters": "^6.1.5",
+    "pixi.js": "^8.19.0",
     "simplex-noise": "^4.0.3",
     "tailwindcss": "^4.2.4",
     "three": "^0.169.0"
   },
   "devDependencies": {
+    "@kolkrabbi/kol-component": "^0.6.0",
+    "@kolkrabbi/kol-framework": "^0.2.1",
+    "@kolkrabbi/kol-icons": "^0.4.0",
+    "@kolkrabbi/kol-theme": "^0.6.0",
     "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
     "vite": "^8.0.10",
     "vite-plugin-svgr": "^5.2.0"
   }

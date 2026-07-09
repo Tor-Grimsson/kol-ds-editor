@@ -1,4 +1,4 @@
-import { Icon } from '@kolkrabbi/kol-loader'
+import { Icon } from '@kolkrabbi/kol-icons'
 import { Input } from '@kolkrabbi/kol-component'
 import { useTransport } from './transport'
 
@@ -18,7 +18,15 @@ import { useTransport } from './transport'
  * The fps readout lives in the canvas corner, not here.
  */
 
-function Cell({ name, title, active, onClick, divider }) {
+/* Size presets. `sm` (default) reproduces the desktop footer verbatim; `lg`
+ * scales the cells, icons, and the loop readout to the touch scale used by
+ * the mobile overlay (matches `size="lg"` buttons/toggles, ~40px tall). */
+const SIZES = {
+  sm: { cell: 'px-3 py-1.5', icon: 14, input: 'sm' },
+  lg: { cell: 'px-4 py-2.5', icon: 20, input: 'lg' },
+}
+
+function Cell({ name, title, active, onClick, divider, cfg }) {
   return (
     <button
       type="button"
@@ -27,29 +35,30 @@ function Cell({ name, title, active, onClick, divider }) {
       aria-pressed={active}
       onClick={onClick}
       className={[
-        'px-3 py-1.5 inline-flex items-center cursor-pointer transition-colors',
+        `${cfg.cell} inline-flex items-center cursor-pointer transition-colors`,
         divider ? 'border-l border-fg-08' : '',
         active ? 'text-emphasis' : 'text-meta hover:text-emphasis',
       ].filter(Boolean).join(' ')}
     >
-      <Icon name={name} size={14} />
+      <Icon name={name} size={cfg.icon} />
     </button>
   )
 }
 
-export default function TransportBar() {
-  const { playing, loopSeconds, play, pause, seek, setLoopSeconds } = useTransport()
+export default function TransportBar({ size = 'sm' }) {
+  const cfg = SIZES[size] ?? SIZES.sm
+  const { playing, loopSeconds, play, pause, stop, rewind, setLoopSeconds } = useTransport()
 
   return (
     <div className="flex items-center gap-2">
       <div className="inline-flex rounded overflow-hidden bg-surface-secondary shrink-0">
-        <Cell name="play" title="Play" active={playing} onClick={play} />
-        <Cell name="pause" title="Pause" active={!playing} onClick={pause} divider />
+        <Cell name="play" title="Play" active={playing} onClick={play} cfg={cfg} />
+        <Cell name="pause" title="Pause" active={!playing} onClick={pause} divider cfg={cfg} />
       </div>
 
       <Input
         variant="ghost"
-        size="sm"
+        size={cfg.input}
         prefix="Loop /"
         suffix="s"
         chars={3}
@@ -60,9 +69,11 @@ export default function TransportBar() {
         title="Loop length (seconds)"
       />
 
+      {/* Stop / rewind bump the transport's reset epoch — stateful consumers
+          (sims, trails, video) restart fresh. Pause (left group) never does. */}
       <div className="inline-flex rounded overflow-hidden bg-surface-secondary shrink-0">
-        <Cell name="stop" title="Stop" onClick={() => { pause(); seek(0) }} />
-        <Cell name="rewind" title="Rewind" onClick={() => seek(0)} divider />
+        <Cell name="stop" title="Stop" onClick={stop} cfg={cfg} />
+        <Cell name="rewind" title="Rewind" onClick={rewind} divider cfg={cfg} />
       </div>
     </div>
   )

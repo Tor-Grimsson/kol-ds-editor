@@ -1,4 +1,4 @@
-import { mulberry32 } from './rng.js'
+import { mulberry32 } from '../gl/rng.js'
 
 // Threads (ported from kol-labs-single math/threads: data/threads.js +
 // engine.js). TWO independent layers, fully redrawn each frame:

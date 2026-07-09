@@ -254,7 +254,8 @@ export class IridescentEngine {
       uColors: { value: GRAD_PALETTES[0].cols.map(toVec3) },
     }
     this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, uniforms: this.uniforms })
-    this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat))
+    this.geo = new THREE.PlaneGeometry(2, 2)
+    this.scene.add(new THREE.Mesh(this.geo, this.mat))
   }
 
   resize(w, h) {
@@ -279,16 +280,19 @@ export class IridescentEngine {
     if (p.hue != null) u.uHue.value = p.hue
     if (p.sheen != null) u.uSheen.value = p.sheen
     if (p.gloss != null) u.uGloss.value = p.gloss
-    if (p.relief != null) u.uRelief.value = p.relief
+    /* freq/relief/spin are off-schema (only some presets set them) — map
+     * missing → uniform default so a preset switch on the live engine can't
+     * inherit the previous preset's value. */
+    u.uRelief.value = p.relief ?? 0.9
     if (p.warp != null) u.uWarp.value = p.warp
     if (p.grain != null) u.uGrain.value = p.grain
     if (p.spectral != null) u.uSpectral.value = p.spectral ? 1 : 0
     if (p.angle != null) u.uAngle.value = p.angle
-    if (p.freq != null) u.uFreq.value = p.freq
+    u.uFreq.value = p.freq ?? 2
     if (p.winds != null) u.uWinds.value = p.winds
     if (p.pitch != null) u.uPitch.value = p.pitch
     if (p.petals != null) u.uPetals.value = p.petals
-    if (p.spin != null) u.uSpin.value = p.spin
+    u.uSpin.value = p.spin ?? 1
     if (p.mouth != null) u.uMouth.value = p.mouth
     if (p.speed != null) this.speed = p.speed
     if (p.palette != null) {
@@ -323,6 +327,8 @@ export class IridescentEngine {
   }
 
   destroy() {
+    this.mat?.dispose()
+    this.geo?.dispose()
     if (this.renderer) { this.renderer.dispose(); this.renderer = null }
   }
 }

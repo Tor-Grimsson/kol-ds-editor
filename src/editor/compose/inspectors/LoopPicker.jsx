@@ -1,7 +1,7 @@
-import { Dropdown, LabeledControl } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../state'
 import { groupById, presetsInGroup, presetParams } from '../../../loops/registry'
 import { PICKER_TREE, LEGACY_GROUP_LABELS } from '../../../loops/taxonomy'
+import { PickerRow, PickerDropdown } from './TreePicker'
 
 /**
  * LoopPicker — the app hierarchy (METHOD > TYPE > CATEGORY > PRESET, see
@@ -41,6 +41,12 @@ export function LoopPicker({ layer, tree = PICKER_TREE }) {
       presetId:    preset.id,
       presetLabel: preset.label,
       loopId:      preset.loop,
+      /* A preset is a full param reset — the motion Frame/Form quick-select
+       * dropdowns (ParametersPanel) no longer describe it (labs applyPreset
+       * convention). */
+      _framePreset: 'custom',
+      _formPreset:  'custom',
+      _lookPreset:  'custom',
       ...presetParams(preset),
     })
   }
@@ -54,11 +60,10 @@ export function LoopPicker({ layer, tree = PICKER_TREE }) {
   return (
     <>
       {tree.length > 1 || !parent ? (
-        <LabeledControl label="Type">
+        <PickerRow label="Type">
           <div className="flex flex-col gap-1">
             {parent ? (
-              <Dropdown
-                variant="subtle" size="sm" className="w-full"
+              <PickerDropdown
                 options={tree.map((t) => ({ value: t.label, label: t.label }))}
                 value={parent.label}
                 onChange={onParent}
@@ -69,34 +74,29 @@ export function LoopPicker({ layer, tree = PICKER_TREE }) {
               </span>
             )}
             {parent && parent.groups.length > 1 && (
-              <Dropdown
-                variant="subtle" size="sm" className="w-full"
+              <PickerDropdown
                 options={parent.groups.map((gid) => ({ value: gid, label: parent.labels?.[gid] ?? groupById(gid).label }))}
                 value={group}
                 onChange={onGroup}
               />
             )}
           </div>
-        </LabeledControl>
+        </PickerRow>
       ) : null}
       {subs.length > 1 && (
-        <LabeledControl label="Category">
-          <Dropdown
-            variant="subtle" size="sm" className="w-full"
-            options={subs.map((s) => ({ value: s, label: s }))}
-            value={sub}
-            onChange={onSub}
-          />
-        </LabeledControl>
-      )}
-      <LabeledControl label="Preset">
-        <Dropdown
-          variant="subtle" size="sm" className="w-full"
-          options={subPresets.map((p) => ({ value: p.id, label: p.label }))}
-          value={layer.presetId}
-          onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
+        <PickerRow
+          label="Category"
+          options={subs.map((s) => ({ value: s, label: s }))}
+          value={sub}
+          onChange={onSub}
         />
-      </LabeledControl>
+      )}
+      <PickerRow
+        label="Preset"
+        options={subPresets.map((p) => ({ value: p.id, label: p.label }))}
+        value={layer.presetId}
+        onChange={(id) => applyPreset(presets.find((p) => p.id === id))}
+      />
     </>
   )
 }

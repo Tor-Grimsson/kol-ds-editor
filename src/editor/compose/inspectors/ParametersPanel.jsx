@@ -6,17 +6,28 @@ import { SegmentedToggle } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../state'
 import { findLayerDeep } from '../helpers'
-import { labelForLayer } from '../labels'
 import { useLayerEdit } from '../useLayerEdit'
 import { useGeneratorLibrary } from '../../library/LibraryProvider'
 import AutoControls from '../../params/AutoControls'
 import BindDot from '../../params/BindDot'
+import { ModulationList } from '../../params/ModulationEditor'
+import { deriveScopes, allScopeParams, computeRoll, useRollSeed, SeedField } from '../../params/rolls'
+import { motionPresetsFor, axisKeys } from '../../params/motionPresets'
+import { lookPresetsFor } from '../../params/lookPresets'
+import { paramSection } from '../../params/schema'
+import KeyframeEditor from './KeyframeEditor'
+import CameraPoseSlots from './CameraPoseSlots'
+import RulesEditor from './RulesEditor'
+import { OrganicProfileEditor } from './ProfileEditor'
+import CurveEditor from './CurveEditor'
+import ParatypeTools from './ParatypeTools'
+import SoftformsLayers from './SoftformsLayers'
 import { SHAPE_SCHEMA } from '../../params/schemas/shape'
 import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
 import { TEXT_SCHEMA } from '../../params/schemas/text'
 import { PHOTO_SCHEMA } from '../../params/schemas/photo'
 import { TEXT_TAB_KEYS } from './TextPanel'
-import { loopById, loopBgToggleable } from '../../../loops/registry'
+import { loopById, loopBgToggleable, resolveCameraKeys } from '../../../loops/registry'
 import { MISC_TREE } from '../../../loops/taxonomy'
 import { LoopPicker } from './LoopPicker'
 import KineticPanel from './KineticPanel'
@@ -52,7 +63,7 @@ const SUBTAB_OPTIONS = [
   { value: 'style',    label: 'Style' },
   { value: 'anim',     label: 'Animation' },
 ]
-const ANIM_HINT = 'Animate any parameter via its bind dot.'
+const ANIM_HINT = 'Modulate any parameter via its bind dot (Time · LFO · Expression · Audio · MIDI · Joystick …). Pick a source at the dot; its controls appear here.'
 
 /* Text params minus the styling keys the Text tab owns (one home per
  * control) — leaves Content plus any future non-styling params. */
@@ -64,11 +75,7 @@ export default function ParametersPanel() {
 
   return (
     <div className="kol-compose-rail kol-compose-rail--inspector">
-      {/* min-h matches InspectorRail's header (trash button height) so
-          tab switches never shift the column. */}
-      <div className="flex items-center gap-3 px-4 min-h-[46px]">
-        {layer && <span className="kol-helper-12 text-emphasis">{labelForLayer(layer)}</span>}
-      </div>
+      {/* Header (title + delete) is shared in SelectionPalettePanel. */}
       <div className="kol-compose-inspector-body">
         {layer
           ? <LayerParameters key={layer.id} layer={layer} />
@@ -84,7 +91,7 @@ function LayerParameters({ layer }) {
   const setProp = edit.setProp
   const [tab, setTab] = useState('style')
   const renderAnimate = (p) => <BindDot layer={layer} param={p} setProp={setProp} />
-  const shared = { layer, setProp, updateLayer, palette, renderAnimate, tab }
+  const shared = { layer, setProp, patch: edit.patch, updateLayer, palette, renderAnimate, tab }
   const tabStrip = <SegmentedToggle value={tab} onChange={setTab} options={SUBTAB_OPTIONS} />
 
   let body = null
@@ -103,7 +110,12 @@ function LayerParameters({ layer }) {
           </EditorButton>
         )}
         {tab === 'style' && <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />}
-        {tab === 'anim' && <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />}
+        {tab === 'anim' && (
+          <>
+            <ModulationList layer={layer} schema={SHAPE_SCHEMA} setProp={setProp} />
+            <AutoControls schema={SHAPE_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+          </>
+        )}
       </>
     )
   } else if (layer.type === 'text') {
@@ -115,7 +127,12 @@ function LayerParameters({ layer }) {
     body = (
       <>
         {tab === 'style' && <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />}
-        {tab === 'anim' && <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />}
+        {tab === 'anim' && (
+          <>
+            <ModulationList layer={layer} schema={PHOTO_SCHEMA} setProp={setProp} />
+            <AutoControls schema={PHOTO_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+          </>
+        )}
       </>
     )
   } else if (layer.type === 'loop') {
@@ -142,13 +159,22 @@ function LayerParameters({ layer }) {
   )
 }
 
+/* 'Custom' shows in a motion dropdown only while active, so it never reads
+ * as a second pickable 'off' (labs motionOpts). */
+const motionOpts = (presets, val) => {
+  const opts = presets.map((p) => ({ value: p.id, label: p.label }))
+  return (val == null || val === 'custom') ? [{ value: 'custom', label: 'Custom' }, ...opts] : opts
+}
+
 /**
  * LoopFields — the loop layer's control surface (plan.md Phase 3): category →
  * preset picker (labs Loops page model, always visible above the sub-tab
- * strip), then Generate (theme/toggles + randomise) · Style · Animation.
+ * strip), then Generate (theme/toggles + scoped seeded randomize) · Style ·
+ * Animation (motion Frame/Form preset dropdowns + params + camera rail).
  */
-function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, tabStrip, tree }) {
+function LoopFields({ layer, setProp, patch, updateLayer, palette, renderAnimate, tab, tabStrip, tree }) {
   const loop = loopById(layer.loopId)
+  const schema = loop?.params ?? []
 
   /* Theme — recolour roled color params (bg/fg/accent) via the imported
    * loops theme module. Non-roled params and user edits survive. */
@@ -157,22 +183,70 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
   const onTheme  = (id) => updateLayer(layer.id, { themeId: id, ...themeParams(layer, loop?.params, id, invert) })
   const onInvert = (v)  => updateLayer(layer.id, { themeInvert: v, ...themeParams(layer, loop?.params, themeId, v) })
 
-  const onRandomise = () => {
-    const patch = {}
-    for (const p of loop?.params ?? []) {
-      if (p.noRandom) continue
-      if (p.type === 'range') {
-        const step = p.step ?? 1
-        const raw = p.min + Math.random() * (p.max - p.min)
-        patch[p.key] = Math.min(p.max, Math.max(p.min, Number((Math.round(raw / step) * step).toFixed(4))))
-      } else if (p.type === 'toggle') {
-        patch[p.key] = Math.random() < 0.5
-      } else if (p.type === 'select' && p.options?.length) {
-        patch[p.key] = p.options[Math.floor(Math.random() * p.options.length)].value
-      }
+  /* ── Generate: Look quick-select (labs softforms look recipes) — picking
+   * applies the preset patch in one coalesced write; editing any param a
+   * look covers flips the dropdown to Custom (motion-preset mechanics). ── */
+  const looks = lookPresetsFor(layer.loopId)
+  const lookList = looks ? Object.keys(looks).map((name) => ({ id: name, label: name })) : null
+  const lookKeys = looks ? new Set(Object.values(looks).flatMap((p) => Object.keys(p))) : null
+
+  /* ── Generate: scoped, seeded rolls (labs LoopsShell Generate model) ──
+   * Scope buttons are schema filters (sections + the Colour type-scope);
+   * every press = one seeded randomizeSchema roll merged over the layer,
+   * one history entry, seed persisted as `_rollSeed`. */
+  const seed = useRollSeed(layer)
+  const scopes = deriveScopes(schema, layer)
+  const tables = motionPresetsFor(layer.loopId, layer)
+  const roll = (params, scope) => {
+    const rollPatch = computeRoll(layer, params, seed.take(), { stripNoRandom: !!scope?.motion })
+    /* A motion roll is by definition hand-off-the-preset — flip the touched
+     * axis dropdown(s) to Custom (labs rollMotionFrame/Form). */
+    if (tables && scope?.motion) {
+      if (scope.id !== 'Form') rollPatch._framePreset = 'custom'
+      if (scope.id !== 'Frame') rollPatch._formPreset = 'custom'
     }
-    updateLayer(layer.id, patch)
+    /* Same hand-off rule for the Look dropdown. */
+    if (lookKeys && Object.keys(rollPatch).some((k) => lookKeys.has(k))) rollPatch._lookPreset = 'custom'
+    updateLayer(layer.id, rollPatch)
   }
+
+  /* ── Animation: Frame/Form quick-select presets (labs ScanlineEditor /
+   * PatternControls model). Picking patches only that axis; editing any
+   * param an axis covers flips ITS dropdown to Custom. ── */
+  const frameKeys = tables ? axisKeys(tables.frame) : null
+  const formKeys = tables ? axisKeys(tables.form) : null
+  /* One write path for every schema param — flips whichever quick-select
+   * dropdowns (motion Frame/Form, Look) cover the edited key to Custom. */
+  const setParamProp = (k, v) => {
+    const extra = {}
+    if (frameKeys?.has(k)) extra._framePreset = 'custom'
+    if (formKeys?.has(k)) extra._formPreset = 'custom'
+    if (lookKeys?.has(k)) extra._lookPreset = 'custom'
+    patch({ [k]: v, ...extra })
+  }
+  const applyMotionPreset = (axisProp, presets) => (id) => {
+    const p = presets.find((x) => x.id === id)
+    patch({ [axisProp]: id, ...(p?.params ?? {}) })
+  }
+  const applyLook = (name) => patch({ _lookPreset: name, ...(looks?.[name] ?? {}) })
+
+  /* Field-loop camera rail — the def's `camera` schema (folded into the
+   * layer's defaults by contract.js loopDefaults, read by makeCam at draw)
+   * that AutoControls never rendered; labs showed it as the Camera section
+   * of the Animation tab (LoopsShell.jsx:378). */
+  const cameraSchema = loop?.camera ? loop.camera.map((p) => ({ ...p, section: 'Camera' })) : null
+
+  /* Camera pose slots + reset (labs CameraPanel) — a pose is the layer's
+   * camera param values: the def's camera rail plus any schema params
+   * sectioned 'Camera' (scene3d fov/orbit, softforms3d θ/φ/dist, ribbon…). */
+  const camParams = [...(loop?.camera ?? []), ...schema.filter((p) => paramSection(p) === 'Camera')]
+  const isEngine = loop?.kind === 'engine'
+  const showCamSlots = camParams.length > 0 || (isEngine && loop?.orbit)
+
+  /* 3D-scene keyframe track (primitiveKeyframes sampler) — reachable once
+   * the layer's animMode param is flipped to keyframes. */
+  const showKeyframes = loop?.engine === 'scene'
+    && (layer.animMode === 'keyframes' || layer.animMode === 'keyframe')
 
   return (
     <>
@@ -182,6 +256,19 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
 
       {tab === 'generate' && (
         <>
+          {/* Soft Forms per-form scene editing (labs Layers tab) — the
+              primary control surface, above Look/Theme. */}
+          {(layer.loopId === 'softforms' || layer.loopId === 'softforms3d') && <SoftformsLayers layer={layer} />}
+          {looks && (
+            <LabeledControl label="Look">
+              <Dropdown
+                variant="subtle" size="sm" className="w-full"
+                options={motionOpts(lookList, layer._lookPreset)}
+                value={layer._lookPreset ?? 'custom'}
+                onChange={applyLook}
+              />
+            </LabeledControl>
+          )}
           <div className="grid grid-cols-2 gap-2">
             <LabeledControl label="Theme">
               <Dropdown variant="subtle" size="sm" className="w-full" options={THEME_OPTIONS} value={themeId} onChange={onTheme} />
@@ -205,33 +292,98 @@ function LoopFields({ layer, setProp, updateLayer, palette, renderAnimate, tab, 
                 />
               </LabeledControl>
             )}
-            {/* Camera drag — orbit-capable engines only. On = the engine's
-                OrbitControls own the pointer on this layer (editor move-drag
-                is suppressed there); off = normal layer dragging. */}
-            {loop?.orbit && (
-              <LabeledControl label="Camera drag">
-                <ViewToggle
-                  options={[{ value: 'off', label: 'Off' }, { value: 'on', label: 'On' }]}
-                  viewMode={layer.cameraDrag ? 'on' : 'off'}
-                  onViewChange={(v) => setProp('cameraDrag', v === 'on')}
-                />
-              </LabeledControl>
-            )}
+            {/* Camera is driven by the Orbit tool (C) — a viewport mode, not a
+                per-layer toggle, so it never fights layer dragging. 3D loops
+                orbit; field/pattern loops rotate + zoom; shape loops zoom. */}
+            {(() => {
+              const ck = loop?.orbit ? { yaw: 1, dist: 1 } : resolveCameraKeys(loop)
+              if (!ck) return null
+              const verb = loop?.orbit ? 'drag to orbit, scroll to zoom'
+                : ck.yaw ? 'drag to rotate, scroll to zoom'
+                : 'scroll to zoom'
+              return (
+                <p className="kol-helper-11 text-meta col-span-2">
+                  Press C (Orbit tool) to move the camera — {verb}.
+                </p>
+              )
+            })()}
           </div>
 
-          <EditorButton variant="primary" size="sm" className="w-full" onClick={onRandomise}>
-            Randomise
+          {/* Schema params flagged tab:'generate' (penrose shape/glyph/font/
+              weight/seed) — pickers above the randomize block, labs order. */}
+          <AutoControls schema={schema} layer={layer} setProp={setParamProp} palette={palette} renderAnimate={renderAnimate} tab="generate" />
+
+          <EditorButton variant="primary" size="sm" className="w-full" onClick={() => roll(allScopeParams(schema, layer))}>
+            Randomize all
           </EditorButton>
+          {scopes.length > 0 && (
+            <div className="grid grid-cols-2 gap-2">
+              {scopes.map((s) => (
+                <EditorButton key={s.id} variant="primary" size="sm" onClick={() => roll(s.params, s)}>
+                  {s.label}
+                </EditorButton>
+              ))}
+            </div>
+          )}
+          <SeedField seed={seed} />
+          {/* Pattern-rules tiles: the rule-stack editor (labs Rules section) —
+              seeded rolls share the SeedField above. */}
+          {layer.loopId === 'pattern-rules' && (layer.render ?? 'tiles') === 'tiles' && (
+            <RulesEditor layer={layer} patch={patch} seed={seed} />
+          )}
         </>
       )}
 
       {tab === 'style' && (
-        <AutoControls schema={loop?.params ?? []} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="style" />
+        <>
+          <AutoControls schema={schema} layer={layer} setProp={setParamProp} palette={palette} renderAnimate={renderAnimate} tab="style" />
+          {/* Organic field, Edge profile = Custom: the draggable bezier curve
+              (self-gates on render/field/waveProfile). */}
+          {layer.loopId === 'pattern-rules' && <OrganicProfileEditor layer={layer} patch={patch} />}
+          {/* Math curves: kind/epicycle-term authoring (forks stock clips). */}
+          {layer.loopId === 'math-curves' && <CurveEditor layer={layer} patch={patch} />}
+        </>
       )}
 
       {tab === 'anim' && (
-        <AutoControls schema={loop?.params ?? []} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+        <>
+          {tables && (
+            <>
+              <span className="kol-helper-10 text-meta">Motion</span>
+              <LabeledControl label="Frame">
+                <Dropdown
+                  variant="subtle" size="sm" className="w-full"
+                  options={motionOpts(tables.frame, layer._framePreset)}
+                  value={layer._framePreset ?? 'custom'}
+                  onChange={applyMotionPreset('_framePreset', tables.frame)}
+                />
+              </LabeledControl>
+              <LabeledControl label="Form">
+                <Dropdown
+                  variant="subtle" size="sm" className="w-full"
+                  options={motionOpts(tables.form, layer._formPreset)}
+                  value={layer._formPreset ?? 'custom'}
+                  onChange={applyMotionPreset('_formPreset', tables.form)}
+                />
+              </LabeledControl>
+            </>
+          )}
+          <ModulationList layer={layer} schema={schema} setProp={setParamProp} />
+          <AutoControls schema={schema} layer={layer} setProp={setParamProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+          {showKeyframes && (
+            <KeyframeEditor layer={layer} patch={patch} defaultDuration={loop?.duration ?? 8} />
+          )}
+          {cameraSchema && (
+            <AutoControls schema={cameraSchema} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} />
+          )}
+          {showCamSlots && (
+            <CameraPoseSlots layer={layer} patch={patch} camParams={camParams} isEngine={isEngine} showHeader={!cameraSchema} />
+          )}
+        </>
       )}
+      {/* Para-Type misc layer: flatten-to-vector (Generate) + XY explore
+          pad (Style) — self-gates on loopId + tab. */}
+      <ParatypeTools layer={layer} patch={patch} tab={tab} />
     </>
   )
 }
@@ -269,6 +421,7 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
       stretch:   spec.stretch   ?? layer.stretch,
       overflow:  spec.overflow  ?? layer.overflow,
       rules:     spec.rules     ?? layer.rules,
+      scale:     spec.scale     ?? layer.scale,
     })
   }
 
@@ -303,7 +456,10 @@ function PatternFields({ layer, setProp, updateLayer, palette, renderAnimate, ta
       )}
 
       {tab === 'anim' && (
-        <AutoControls schema={PATTERN_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+        <>
+          <ModulationList layer={layer} schema={PATTERN_SCHEMA} setProp={setProp} />
+          <AutoControls schema={PATTERN_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+        </>
       )}
     </>
   )
@@ -374,7 +530,10 @@ function TextFields({ layer, setProp, updateLayer, palette, renderAnimate, tab }
       )}
 
       {tab === 'anim' && (
-        <AutoControls schema={TEXT_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+        <>
+          <ModulationList layer={layer} schema={TEXT_SCHEMA} setProp={setProp} />
+          <AutoControls schema={TEXT_SCHEMA} layer={layer} setProp={setProp} palette={palette} renderAnimate={renderAnimate} tab="anim" emptyHint={ANIM_HINT} />
+        </>
       )}
     </>
   )

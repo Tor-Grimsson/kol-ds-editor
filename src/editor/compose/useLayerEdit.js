@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useComposeState } from './state'
 
 /**
@@ -60,5 +60,7 @@ export function useLayerEdit(id, { history = 'discrete', coalesceMs = 250 } = {}
    * isn't dropped on the floor. */
   useEffect(() => () => flush(), [flush, id])
 
-  return { patch, setProp, flush }
+  /* Memoized so consumers can put the hook's return in effect deps (e.g.
+   * CanvasArea's window keydown keymap) without rebinding every render. */
+  return useMemo(() => ({ patch, setProp, flush }), [patch, setProp, flush])
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ColorSwatch, Input, LabeledControl, PopoverPanel, usePopover } from '@kolkrabbi/kol-component'
 import { resolveColor } from '../state'
 
@@ -38,6 +38,24 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
   const [open, setOpen] = useState(false)
   const popover = usePopover({ open, onOpenChange: setOpen, placement: 'bottom-start', offset: 4 })
 
+  /* Hex typing commits on blur / Enter (the CanvasInspector SizeField idiom)
+   * — a per-keystroke write would push a partial hex ('#F') into layer +
+   * paint state and flood undo with one entry per character. Invalid drafts
+   * revert to the current value; 3-digit shorthand expands. */
+  const hexValue = (isNone || isVar) ? '' : resolved.replace(/^#/, '').toUpperCase()
+  const [draft, setDraft] = useState(hexValue)
+  useEffect(() => { setDraft(hexValue) }, [hexValue])
+  const commitHex = () => {
+    const clean = draft.replace(/^#/, '').trim().toUpperCase()
+    const full  = /^[0-9A-F]{6}$/.test(clean)
+      ? clean
+      : /^[0-9A-F]{3}$/.test(clean)
+        ? clean.split('').map((c) => c + c).join('')
+        : null
+    if (full) { onChange('#' + full); setDraft(full) }
+    else      setDraft(hexValue)
+  }
+
   return (
     <LabeledControl label={hideLabel ? null : label}>
       <div className="flex items-center gap-2">
@@ -66,8 +84,10 @@ export function ColorField({ value, onChange, palette, label = 'Color', hideLabe
           chars={6}
           uppercase
           placeholder="–"
-          value={(isNone || isVar) ? '' : resolved.replace(/^#/, '').toUpperCase()}
-          onChange={(e) => onChange('#' + e.target.value.replace(/^#/, '').toUpperCase())}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitHex}
+          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
         />
       </div>
       <PopoverPanel

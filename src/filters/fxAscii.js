@@ -7,13 +7,14 @@
  * background shows through.
  *
  * Amount is the labs dry/wet dial (photo crossfaded back over the glyphs);
- * motion is the shared sweep rig (sweeps.js) behind the Animate toggle —
- * woven from the transport's u with integer cycles, so every sweep shape
- * loops seamlessly. Same id as the old 5-param port, superset params:
- * legacy keys (cellSize / charset / fg / bg / invert) resolve unchanged.
+ * motion is the STACKED sweep rig (sweeps.js, `params.sweeps` array with the
+ * labs one-click presets) — woven from the transport's u with integer
+ * cycles, so every sweep shape loops seamlessly. Same id as the old 5-param
+ * port, superset params: legacy keys (cellSize / charset / fg / bg / invert)
+ * resolve unchanged.
  */
-import { AMOUNT_PARAM, mixSourceOver } from './fxCore.js'
-import { SWEEP_PARAMS, NO_SWEEP, sweepState, evalSweep, isReveal } from './sweeps.js'
+import { AMOUNT_PARAM, mixSourceOver, registerSourceCache } from './fxCore.js'
+import { NO_SWEEP, sweepStates, evalSweeps, anyReveal } from './sweeps.js'
 
 const DENSITY_RAMP = ' .:-=+*#%@'
 const EDGE_GLYPHS = ['—', '\\', '|', '/'] // by gradient direction, quantized
@@ -51,6 +52,7 @@ const rampChar = (ramp, l) => ramp[Math.max(0, Math.min(ramp.length - 1, Math.fl
  * canvas whenever the image/fit/size changes, so canvas identity is the key:
  * base pixels read once per source, nothing allocated per frame. */
 const pixelCache = new WeakMap()
+registerSourceCache(pixelCache)   /* chain intermediates / loop sources invalidate in place */
 function pixelsFor(src) {
   let d = pixelCache.get(src)
   if (!d) {
@@ -64,6 +66,7 @@ export default {
   id: 'fx-ascii',
   label: 'ASCII',
   animated: true,
+  sweeps: true,   /* stacked sweep rig (sweeps.js) — Effects panel Motion tab */
   params: [
     { ...AMOUNT_PARAM, section: 'Effect' },
     { key: 'algorithm', label: 'Algorithm', type: 'select', options: ALGORITHM_OPTIONS, default: 'density', section: 'Algorithm' },
@@ -71,26 +74,29 @@ export default {
     { key: 'ramp', label: 'Custom ramp', type: 'text', rows: 1, placeholder: DENSITY_RAMP, default: DENSITY_RAMP, section: 'Characters', when: (l) => l.algorithm === 'custom' },
     { key: 'invert', label: 'Invert', type: 'toggle', default: false, section: 'Characters' },
     { key: 'glyphScale', label: 'Glyph scale', type: 'range', min: 0.5, max: 2, step: 0.05, default: 1, section: 'Characters' },
-    { key: 'cellSize', label: 'Cell size', type: 'range', min: 4, max: 40, step: 1, default: 10, section: 'Cells' },
+    /* noRandom: cell size is grid resolution — a size thing, not a look. */
+    { key: 'cellSize', label: 'Cell size', type: 'range', min: 4, max: 40, step: 1, default: 10, noRandom: true, section: 'Cells' },
     { key: 'contrast', label: 'Contrast', type: 'range', min: -100, max: 100, step: 1, default: 0, section: 'Cells' },
     { key: 'useColor', label: 'Original color', type: 'toggle', default: true, section: 'Color' },
     { key: 'fg', label: 'Foreground', type: 'color', role: 'fg', default: '#f4f1ea', section: 'Color', when: (l) => !(l.useColor ?? true) },
     { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#06070b', section: 'Color' },
-    ...SWEEP_PARAMS,
   ],
   apply(ctx, src, w, h, p, u) {
     if ((p.amount ?? 100) <= 0) { ctx.drawImage(src, 0, 0, w, h); return }
     const sw = src.width
     const sh = src.height
     const data = pixelsFor(src)
-    const step = Math.max(2, Math.round(p.cellSize ?? 10))
+    /* The source is dpr-backed (sw = w·dpr); cellSize is authored in css px,
+     * so scale it into source-pixel space (k = 1 at dpr 1 — identical). */
+    const k = sw / w || 1
+    const step = Math.max(2, Math.round((p.cellSize ?? 10) * k))
     const algorithm = p.algorithm ?? 'density'
     const useColor = p.useColor ?? true
     const invert = !!p.invert
 
-    const st = sweepState(p, u)
-    const reveal = isReveal(st)
-    const geo = !!st && st.target === 'geometry'
+    const st = sweepStates(p, u)
+    const reveal = anyReveal(st)
+    const geo = !!st && st.some((s) => s.target === 'geometry')
 
     const contrast = p.contrast ?? 0
     const cf = (259 * (contrast + 255)) / (255 * (259 - contrast))
@@ -136,7 +142,7 @@ export default {
         let l = lumaAt(cx, cy)
         if (l == null) continue
 
-        const pkt = st ? evalSweep(st, cx / sw, cy / sh) : NO_SWEEP
+        const pkt = st ? evalSweeps(st, cx / sw, cy / sh) : NO_SWEEP
         if (pkt.hasReveal && pkt.reveal < 0.5) continue // photo underlay shows through
         if (pkt.bright) l = Math.max(0, Math.min(1, l + pkt.bright))
 

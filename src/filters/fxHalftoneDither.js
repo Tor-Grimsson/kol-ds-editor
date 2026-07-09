@@ -6,22 +6,18 @@
  * 23 modes (halftone, glitch, flow field, crosshatch, CRT scanline, …).
  *
  * Amount is the labs dry/wet dial (photo crossfaded back over the cells);
- * motion is the shared sweep rig (sweeps.js) behind the Animate toggle.
- * One deliberate deviation: the labs' Math.random() modes (random size/rot,
- * jitter, bio, eraser) rerolled every render — under the editor's transport
- * that strobes at 60fps, so they use a deterministic per-cell hash instead
- * (stable stills, still animatable via sweeps).
+ * motion is the STACKED sweep rig (sweeps.js, `params.sweeps` array with the
+ * labs one-click presets). One deliberate deviation: the labs' Math.random()
+ * modes (random size/rot, jitter, bio, eraser) rerolled every render — under
+ * the editor's transport that strobes at 60fps, so they use a deterministic
+ * per-cell hash instead (stable stills, still animatable via sweeps).
  */
-import { AMOUNT_PARAM, mixSourceOver } from './fxCore.js'
-import { SWEEP_PARAMS, NO_SWEEP, sweepState, evalSweep, isReveal } from './sweeps.js'
+import { AMOUNT_PARAM, mixSourceOver, buffersFor, sinHash2 as cellRand } from './fxCore.js'
+import { NO_SWEEP, sweepStates, evalSweeps, anyReveal } from './sweeps.js'
 
 const TAU = Math.PI * 2
 
-/* Deterministic per-cell "random" (see header) — labs vnoise hash. */
-function cellRand(x, y) {
-  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
-  return s - Math.floor(s)
-}
+/* cellRand: deterministic per-cell "random" (see header) — fxCore's sinHash2. */
 
 /* ── shape library (labs originals) ─────────────────────────────────── */
 function drawPoly(ctx, x, y, rad, sides, offset) {
@@ -166,26 +162,17 @@ const SHAPE_OPTIONS = [
 /* Modes whose formula actually reads Intensity — the slider gates on these. */
 const INTENSITY_MODES = new Set(['glitch', 'flow', 'edges', 'melt', 'jitter', 'interference', 'crt_scan', 'eraser'])
 
-/* Per-source pixel cache (glass.js pattern) — keyed on fitted-canvas identity. */
-const pixelCache = new WeakMap()
-function pixelsFor(src) {
-  let d = pixelCache.get(src)
-  if (!d) {
-    d = src.getContext('2d').getImageData(0, 0, src.width, src.height).data
-    pixelCache.set(src, d)
-  }
-  return d
-}
-
 export default {
   id: 'fx-halftone-dither',
   label: 'Dither',
   animated: true,
+  sweeps: true,   /* stacked sweep rig (sweeps.js) — Effects panel Motion tab */
   params: [
     { ...AMOUNT_PARAM, section: 'Effect' },
     { key: 'mode', label: 'Mode', type: 'select', options: MODE_OPTIONS, default: 'halftone', section: 'Mode' },
     { key: 'shape', label: 'Shape', type: 'select', options: SHAPE_OPTIONS, default: 'circle', section: 'Shape' },
-    { key: 'cellSize', label: 'Cell size', type: 'range', min: 4, max: 40, step: 1, default: 10, section: 'Dither' },
+    /* noRandom: cell size is grid resolution — a size thing, not a look. */
+    { key: 'cellSize', label: 'Cell size', type: 'range', min: 4, max: 40, step: 1, default: 10, noRandom: true, section: 'Dither' },
     { key: 'baseScale', label: 'Scale', type: 'range', min: 0.1, max: 3, step: 0.025, default: 0.9, section: 'Dither' },
     { key: 'gap', label: 'Gap', type: 'range', min: 0, max: 20, step: 0.25, default: 1, section: 'Dither' },
     { key: 'contrast', label: 'Contrast', type: 'range', min: -100, max: 100, step: 1, default: 0, section: 'Dither' },
@@ -193,23 +180,25 @@ export default {
     { key: 'useColor', label: 'Original color', type: 'toggle', default: true, section: 'Color' },
     { key: 'monoColor', label: 'Foreground', type: 'color', role: 'fg', default: '#ffffff', section: 'Color', when: (l) => !(l.useColor ?? true) },
     { key: 'bgColor', label: 'Background', type: 'color', role: 'bg', default: '#111111', section: 'Color' },
-    ...SWEEP_PARAMS,
   ],
   apply(ctx, src, w, h, p, u) {
     if ((p.amount ?? 100) <= 0) { ctx.drawImage(src, 0, 0, w, h); return }
     const sw = src.width
     const sh = src.height
-    const data = pixelsFor(src)
-    const step = Math.max(2, Math.round(p.cellSize ?? 10))
+    const data = buffersFor(src).base.data // shared per-source cache (fxCore)
+    /* The source is dpr-backed (sw = w·dpr); cellSize/gap are authored in css
+     * px, so scale them into source-pixel space (k = 1 at dpr 1 — identical). */
+    const k = sw / w || 1
+    const step = Math.max(2, Math.round((p.cellSize ?? 10) * k))
     const mode = p.mode ?? 'halftone'
     const shape = p.shape ?? 'circle'
     const baseScale = p.baseScale ?? 0.9
-    const gap = p.gap ?? 1
+    const gap = (p.gap ?? 1) * k
     const intensity = p.intensity ?? 1
     const useColor = p.useColor ?? true
 
-    const st = sweepState(p, u)
-    const reveal = isReveal(st)
+    const st = sweepStates(p, u)
+    const reveal = anyReveal(st)
 
     const contrast = p.contrast ?? 0
     const cf = (259 * (contrast + 255)) / (255 * (259 - contrast))
@@ -244,7 +233,7 @@ export default {
         g = Math.max(0, Math.min(255, cf * (g - 128) + 128))
         b = Math.max(0, Math.min(255, cf * (b - 128) + 128))
 
-        const pkt = st ? evalSweep(st, (x + step / 2) / sw, (y + step / 2) / sh) : NO_SWEEP
+        const pkt = st ? evalSweeps(st, (x + step / 2) / sw, (y + step / 2) / sh) : NO_SWEEP
         if (pkt.hasReveal && pkt.reveal < 0.5) continue // photo underlay shows through
 
         let luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255

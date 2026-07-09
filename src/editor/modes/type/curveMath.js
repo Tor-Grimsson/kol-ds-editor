@@ -8,7 +8,9 @@
  * cubic-bezier defined by two control points (CSS animation timing model).
  */
 
-const TAU   = Math.PI * 2
+import { TAU } from '../../../loops/lib/util.js'
+
+// generalized (lo, hi) clamp — deliberately not lib/util's fixed clamp01
 export const clamp = (v, lo = 0, hi = 1) => v < lo ? lo : v > hi ? hi : v
 
 /**

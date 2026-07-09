@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import { TabsRow } from '../../color/PanelTabs'
 import { useComposeState } from '../../compose/state'
 import { findLayerDeep } from '../../compose/helpers'
+import { labelForLayer } from '../../compose/labels'
+import EditorButton from '../../components/EditorButton'
 import InspectorRail from '../../compose/InspectorRail'
 import ParametersPanel from '../../compose/inspectors/ParametersPanel'
 import EffectsPanel from '../../compose/inspectors/EffectsPanel'
@@ -25,7 +27,7 @@ const BASE_TABS = ['Inspector', 'Parameters', 'Effects']
  * `kol:open-effects` / `kol:open-pattern` / `kol:open-text` to flip here.
  */
 export default function SelectionPalettePanel() {
-  const { selectedId, layers } = useComposeState()
+  const { selectedId, selectedIds, layers, deleteSelected } = useComposeState()
   const [tab, setTab]  = useState('Inspector')
 
   /* Same layer resolution as ParametersPanel/EffectsPanel — in multi-select
@@ -34,6 +36,18 @@ export default function SelectionPalettePanel() {
   const tabs = layer?.type === 'pattern' ? [...BASE_TABS, 'Pattern']
     : layer?.type === 'text' ? [...BASE_TABS, 'Text']
     : BASE_TABS
+
+  /* One shared header for every tab (title + delete) so switching tabs never
+   * swaps the strip — the per-panel headers were removed. Title/trash logic
+   * mirrors the old InspectorRail header (canvas / N-layers / layer name);
+   * trash is suppressed for the canvas selection (would nuke every layer). */
+  const isCanvas     = selectedId === 'canvas'
+  const layerOnlyIds = (selectedIds ?? []).filter((id) => id !== 'canvas')
+  const headerTitle  = isCanvas ? 'Canvas'
+    : layerOnlyIds.length >= 2 ? `${layerOnlyIds.length} layers`
+    : layer ? labelForLayer(layer)
+    : 'Canvas'
+  const canDelete = !isCanvas && layerOnlyIds.length > 0
   /* Selection changes can strand the active tab (Pattern active, then a
    * shape selected / deselect-all) — fall back without writing state. */
   const active = tabs.includes(tab) ? tab : 'Inspector'
@@ -64,7 +78,26 @@ export default function SelectionPalettePanel() {
       <div className="border-b border-fg-08">
         <TabsRow tabs={tabs} active={active} onChange={setTab} />
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      {/* Shared header — identical across all tabs (title + delete). */}
+      <div className="flex items-center gap-3 px-4 min-h-[46px]">
+        {headerTitle && <span className="kol-helper-12 text-emphasis">{headerTitle}</span>}
+        {canDelete && (
+          <EditorButton
+            variant="primary"
+            size="sm"
+            animateIcon
+            quiet
+            iconOnly="trash"
+            iconSize={12}
+            aria-label="Delete selected"
+            title="Delete selected"
+            onClick={deleteSelected}
+            className="ml-auto"
+            style={{ padding: 6 }}
+          />
+        )}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable]">
         {active === 'Inspector'  && <InspectorRail />}
         {active === 'Parameters' && <ParametersPanel />}
         {active === 'Effects'    && <EffectsPanel />}

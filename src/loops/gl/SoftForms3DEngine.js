@@ -262,7 +262,8 @@ export class SoftForms3DEngine {
       uHueOff:   { value: new Array(MAX_FORMS).fill(0) },
     }
     this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, uniforms: this.uniforms })
-    this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat))
+    this.geo = new THREE.PlaneGeometry(2, 2)
+    this.scene.add(new THREE.Mesh(this.geo, this.mat))
   }
 
   resize(w, h) {
@@ -333,5 +334,9 @@ export class SoftForms3DEngine {
     })
   }
 
-  destroy() { if (this.renderer) { this.renderer.dispose(); this.renderer = null } }
+  destroy() {
+    this.mat?.dispose()
+    this.geo?.dispose()
+    if (this.renderer) { this.renderer.dispose(); this.renderer = null }
+  }
 }

@@ -1,5 +1,6 @@
 import { TAU, mixHex, hexToRgb } from '../lib/util.js'
 import { resolveShape, DEFAULT_SHAPE_ID, SHAPE_OPTIONS } from './shapes.js'
+import { glyphShape } from './glyphTile.js'
 import { composeCell, compileRules } from './rules.js'
 import { drawStripes } from './fields/stripeField.js'
 import { drawTartan } from './fields/tartanField.js'
@@ -16,10 +17,11 @@ import { SETT_OPTIONS } from './fields/setts.js'
 // rotation sway (swing) and colour (mix → color2). Seamless: the only u-terms are
 // `u·TAU·animCycles`, `u·TAU·camFlow` and `u·360·spin`, all whole cycles.
 //
-// Ported from kol-labs-single MINUS the 'glyph' tile shape — that branch pulled
-// letterform outlines via opentype.js (labs lib/glyphPath.js), a dependency this
-// editor deliberately excludes. Everything else (tiles / field / weave renders)
-// is source-verbatim.
+// Ported from kol-labs-single INCLUDING the 'glyph' tile shape — labs pulled
+// letterform outlines via its own lib/glyphPath.js; here glyphTile.js reuses
+// the type mode's fontLoader (opentype.js, already a dep) over the Right
+// Grotesk cuts. Everything else (tiles / field / weave renders) is
+// source-verbatim.
 //
 // Editor surface: labs drove this loop with a bespoke PatternControls panel; here
 // the `params` schema below IS the inspector (AutoControls), gated by `when` on
@@ -28,12 +30,27 @@ import { SETT_OPTIONS } from './fields/setts.js'
 
 let cache = null // { key, viewBox, paths:[Path2D] }
 let rulesCache = null // { key, compiled }
+const EMPTY = { key: '', viewBox: [0, 0, 1, 1], paths: [] }
 function buildPaths(viewBox, paths) {
   const built = []
   for (const d of paths) { try { built.push(new Path2D(d)) } catch { /* skip bad path */ } }
   return { viewBox, paths: built }
 }
-function shapeFor(id, customSvg) {
+function shapeFor(id, customSvg, p) {
+  // 'glyph' — the tile is a TYPE outline (glyphTile.js over the type mode's
+  // fontLoader). Async: returns an uncached EMPTY (bg-only frame) until the
+  // font has parsed, then caches — the loop retries next frame (labs idiom).
+  if (id === 'glyph') {
+    const text = p?.glyphChar || 'A'
+    const width = p?.glyphFont || 'base'
+    const weight = p?.glyphWeight ?? 900
+    const key = `glyph|${width}|${weight}|${text}`
+    if (cache && cache.key === key) return cache
+    const gs = glyphShape(width, weight, text)
+    if (!gs) return EMPTY // font cold — retry next frame
+    cache = { key, ...buildPaths(gs.viewBox, gs.paths) }
+    return cache
+  }
   const key = id + '|' + (id === 'custom' ? customSvg : '')
   if (cache && cache.key === key) return cache
   const { viewBox, paths } = resolveShape(id, customSvg)
@@ -152,7 +169,23 @@ function drawWeave(ctx, u, w, h, p) {
 }
 
 // ── Inspector schema options (select vocabularies) ────────────────────────────
-const TILE_SHAPE_OPTIONS = SHAPE_OPTIONS.filter((o) => o.value !== 'custom')
+// Full catalog including 'glyph' + 'custom' (labs parity — both restored).
+const TILE_SHAPE_OPTIONS = SHAPE_OPTIONS
+// Glyph tile faces — the cuts fontLoader can actually serve (Right Grotesk
+// TTFs in /public/fonts/Right-Grotesk-ttf; 'mono' is woff2-only ⇒ excluded).
+// Values are fontLoader's width ids / numeric weights.
+const GLYPH_FONT_OPTIONS = [
+  { value: 'base', label: 'Display' }, { value: 'Compact', label: 'Compact' },
+  { value: 'Tall', label: 'Tall' }, { value: 'Wide', label: 'Wide' },
+  { value: 'Narrow', label: 'Narrow' }, { value: 'Spatial', label: 'Spatial' },
+  { value: 'Tight', label: 'Tight' },
+]
+const GLYPH_WEIGHT_OPTIONS = [
+  { value: 100, label: 'Fine' }, { value: 300, label: 'Light' },
+  { value: 400, label: 'Regular' }, { value: 500, label: 'Medium' },
+  { value: 600, label: 'Dark' }, { value: 700, label: 'Bold' },
+  { value: 900, label: 'Black' },
+]
 const DIR_OPTIONS = [
   { value: 'right', label: 'Right' }, { value: 'left', label: 'Left' },
   { value: 'up', label: 'Up' }, { value: 'down', label: 'Down' },
@@ -176,15 +209,16 @@ const WEAVE_OPTIONS = [
   { value: 'plain', label: 'Plain' }, { value: 'twill', label: 'Twill' },
   { value: 'satin', label: 'Satin' }, { value: 'basket', label: 'Basket' },
 ]
-// Named organic edge profiles (fields/organicField.js PROFILES). 'custom'
-// (editable bezier via waveCurve) is preset-only — no curve editor here.
+// Named organic edge profiles (fields/organicField.js PROFILES) + 'custom' —
+// an editable bezier (waveCurve, drawn via customWave) edited in the
+// inspector's ProfileEditor (compose/inspectors/ProfileEditor.jsx).
 const PROFILE_OPTIONS = [
   { value: 'sine', label: 'Sine' }, { value: 'blob', label: 'Blob' },
   { value: 'hump', label: 'Hump' }, { value: 'swell', label: 'Swell' },
   { value: 'double', label: 'Double' }, { value: 'ripple', label: 'Ripple' },
   { value: 'tri', label: 'Triangle' }, { value: 'ridge', label: 'Ridge' },
   { value: 'pinch', label: 'Pinch' }, { value: 'saw', label: 'Saw' },
-  { value: 'step', label: 'Step' },
+  { value: 'step', label: 'Step' }, { value: 'custom', label: 'Custom' },
 ]
 
 // Render-kind guards for `when` — the layer carries the preset's full param set,
@@ -209,65 +243,82 @@ export default {
   // The full param object comes from `defaults` (loopDefaults escape hatch) —
   // opaque params (rules arrays, render/field kind, waveCurve) have no schema
   // entry and ride along on the layer untouched.
+  // Sections mirror the labs rail groups (Tiles / Grid / Colour / Field /
+  // Frame / Form) IN the existing param order — they add headers + feed the
+  // scoped-randomize buttons (rolls.jsx deriveScopes; Frame/Form register as
+  // motion scopes) without moving any control.
   params: [
     // Palette
-    { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#0e0e11' },
-    { key: 'color', label: 'Colour', type: 'color', role: 'fg', default: '#fcfbf8' },
-    { key: 'color2', label: 'Colour 2', type: 'color', role: 'accent', default: '#c2502e' },
-    { key: 'color3', label: 'Colour 3', type: 'color', default: '#3f6485' },
+    { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#0e0e11', section: 'Colour' },
+    { key: 'color', label: 'Colour', type: 'color', role: 'fg', default: '#fcfbf8', section: 'Colour' },
+    { key: 'color2', label: 'Colour 2', type: 'color', role: 'accent', default: '#c2502e', section: 'Colour' },
+    { key: 'color3', label: 'Colour 3', type: 'color', default: '#3f6485', section: 'Colour' },
     // Tiles — shape + grid (grid shared with weave)
-    { key: 'shape', label: 'Shape', type: 'select', options: TILE_SHAPE_OPTIONS, default: DEFAULT_SHAPE_ID, when: isTiles },
-    { key: 'cols', label: 'Cols', type: 'range', min: 1, max: 32, step: 1, default: 4, noRandom: true, animatable: false, when: (l) => !isField(l) },
-    { key: 'rows', label: 'Rows', type: 'range', min: 1, max: 32, step: 1, default: 4, noRandom: true, animatable: false, when: (l) => !isField(l) },
-    { key: 'cell', label: 'Cell', type: 'range', min: 40, max: 280, step: 1, default: 120, noRandom: true, when: (l) => !isField(l) },
-    { key: 'gap', label: 'Gap', type: 'range', min: -40, max: 80, step: 1, default: 8, when: (l) => !isField(l) },
-    { key: 'stretch', label: 'Stretch', type: 'toggle', default: false, when: isTiles },
-    { key: 'showGrid', label: 'Grid overlay', type: 'toggle', default: false, when: isTiles },
-    { key: 'colorRule', label: 'Colour rule', type: 'select', options: COLOR_RULE_OPTIONS, default: 'none', when: isTiles },
-    // Weave — the interlacing
-    { key: 'weaveType', label: 'Weave', type: 'select', options: WEAVE_OPTIONS, default: 'plain', when: isWeave },
-    { key: 'strandWidth', label: 'Strand width', type: 'range', min: 0.3, max: 1, step: 0.02, default: 0.7, when: isWeave },
+    { key: 'shape', label: 'Shape', type: 'select', options: TILE_SHAPE_OPTIONS, default: DEFAULT_SHAPE_ID, when: isTiles, section: 'Tiles' },
+    // Glyph tile (shape:'glyph') — char/run + a Right Grotesk cut (glyphTile.js)
+    { key: 'glyphChar', label: 'Glyph', type: 'text', rows: 1, placeholder: 'A', default: 'A', when: (l) => isTiles(l) && l.shape === 'glyph', section: 'Tiles' },
+    { key: 'glyphFont', label: 'Font', type: 'select', options: GLYPH_FONT_OPTIONS, default: 'base', when: (l) => isTiles(l) && l.shape === 'glyph', section: 'Tiles' },
+    { key: 'glyphWeight', label: 'Weight', type: 'select', numeric: true, options: GLYPH_WEIGHT_OPTIONS, default: 900, when: (l) => isTiles(l) && l.shape === 'glyph', section: 'Tiles' },
+    // Custom tile (shape:'custom') — pasted SVG, sanitized at resolve (shapes.js)
+    { key: 'customSvg', label: 'Custom SVG', type: 'text', rows: 4, placeholder: '<svg viewBox="0 0 24 24"><path d="…"/></svg>', default: '', when: (l) => isTiles(l) && l.shape === 'custom', section: 'Tiles' },
+    { key: 'cols', label: 'Cols', type: 'range', min: 1, max: 32, step: 1, default: 4, noRandom: true, animatable: false, when: (l) => !isField(l), section: 'Grid' },
+    { key: 'rows', label: 'Rows', type: 'range', min: 1, max: 32, step: 1, default: 4, noRandom: true, animatable: false, when: (l) => !isField(l), section: 'Grid' },
+    { key: 'cell', label: 'Cell', type: 'range', min: 40, max: 280, step: 1, default: 120, noRandom: true, when: (l) => !isField(l), section: 'Grid' },
+    { key: 'gap', label: 'Gap', type: 'range', min: -40, max: 80, step: 1, default: 8, when: (l) => !isField(l), section: 'Grid' },
+    { key: 'stretch', label: 'Stretch', type: 'toggle', default: false, when: isTiles, section: 'Grid' },
+    { key: 'showGrid', label: 'Grid overlay', type: 'toggle', default: false, when: isTiles, section: 'Grid' },
+    { key: 'colorRule', label: 'Colour rule', type: 'select', options: COLOR_RULE_OPTIONS, default: 'none', when: isTiles, section: 'Colour' },
+    // Weave — the interlacing (structure scope, shared with the grid)
+    { key: 'weaveType', label: 'Weave', type: 'select', options: WEAVE_OPTIONS, default: 'plain', when: isWeave, section: 'Grid' },
+    { key: 'strandWidth', label: 'Strand width', type: 'range', min: 0.3, max: 1, step: 0.02, default: 0.7, when: isWeave, section: 'Grid' },
     // Field — band geometry (stripes + organic)
-    { key: 'stripeAngle', label: 'Band angle', type: 'range', min: 0, max: 180, step: 1, default: 0, when: isBands },
-    { key: 'stripePitch', label: 'Pitch', type: 'range', min: 8, max: 200, step: 1, default: 60, when: isBands },
-    { key: 'bandCount', label: 'Bands', type: 'range', min: 1, max: 3, step: 1, default: 2, when: isBands },
-    { key: 'duty', label: 'Duty', type: 'range', min: 0.05, max: 1, step: 0.01, default: 1, when: isStripes },
-    { key: 'edgeSoftness', label: 'Softness', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isStripes },
-    { key: 'waveAmp', label: 'Wave depth', type: 'range', min: 0, max: 1, step: 0.05, default: 0.4, when: isBands },
-    { key: 'waveFreq', label: 'Wave frequency', type: 'range', min: 0.2, max: 4, step: 0.1, default: 1.5, when: isBands },
-    { key: 'waveProfile', label: 'Edge profile', type: 'select', options: PROFILE_OPTIONS, default: 'sine', when: isOrganic },
+    { key: 'stripeAngle', label: 'Band angle', type: 'range', min: 0, max: 180, step: 1, default: 0, when: isBands, section: 'Field' },
+    { key: 'stripePitch', label: 'Pitch', type: 'range', min: 8, max: 200, step: 1, default: 60, when: isBands, section: 'Field' },
+    // Static position within the field (labs PatternControls Offset X/Y —
+    // defaults already ride in `defaults` below; read by stripe + organic)
+    { key: 'offsetX', label: 'Offset X', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isBands, section: 'Field' },
+    { key: 'offsetY', label: 'Offset Y', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isBands, section: 'Field' },
+    { key: 'bandCount', label: 'Bands', type: 'range', min: 1, max: 3, step: 1, default: 2, when: isBands, section: 'Field' },
+    { key: 'duty', label: 'Duty', type: 'range', min: 0.05, max: 1, step: 0.01, default: 1, when: isStripes, section: 'Field' },
+    { key: 'edgeSoftness', label: 'Softness', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isStripes, section: 'Field' },
+    { key: 'waveAmp', label: 'Wave depth', type: 'range', min: 0, max: 1, step: 0.05, default: 0.4, when: isBands, section: 'Field' },
+    { key: 'waveFreq', label: 'Wave frequency', type: 'range', min: 0.2, max: 4, step: 0.1, default: 1.5, when: isBands, section: 'Field' },
+    { key: 'waveProfile', label: 'Edge profile', type: 'select', options: PROFILE_OPTIONS, default: 'sine', when: isOrganic, section: 'Field' },
     // Field — tartan sett
-    { key: 'sett', label: 'Sett', type: 'select', options: SETT_OPTIONS, default: 'black-watch', when: isTartan },
-    { key: 'settScale', label: 'Thread scale', type: 'range', min: 1, max: 14, step: 0.5, default: 5, when: isTartan },
-    { key: 'twill', label: 'Twill', type: 'range', min: 0, max: 0.5, step: 0.02, default: 0.18, when: isTartan },
+    { key: 'sett', label: 'Sett', type: 'select', options: SETT_OPTIONS, default: 'black-watch', when: isTartan, section: 'Field' },
+    { key: 'settScale', label: 'Thread scale', type: 'range', min: 1, max: 14, step: 0.5, default: 5, when: isTartan, section: 'Field' },
+    { key: 'twill', label: 'Twill', type: 'range', min: 0, max: 0.5, step: 0.02, default: 0.18, when: isTartan, section: 'Field' },
     // Camera / Frame (all render kinds; flow is whole cycles ⇒ seamless)
-    { key: 'camZoom', label: 'Zoom', type: 'range', min: 0.3, max: 3, step: 0.05, default: 1 },
-    { key: 'camAngle', label: 'Angle', type: 'range', min: 0, max: 360, step: 1, default: 0 },
-    { key: 'camFlow', label: 'Flow', type: 'range', min: 0, max: 4, step: 1, default: 1 },
-    { key: 'panDir', label: 'Direction', type: 'select', options: DIR_OPTIONS, default: 'diag', when: (l) => !isBands(l) },
-    { key: 'panDir', label: 'Direction', type: 'select', options: FIELD_DIR_OPTIONS, default: 'right', noRandom: true, when: isBands },
-    { key: 'spin', label: 'Spin', type: 'range', min: 0, max: 3, step: 1, default: 0, when: isTiles },
+    { key: 'camZoom', label: 'Zoom', type: 'range', min: 0.3, max: 3, step: 0.05, default: 1, section: 'Frame' },
+    { key: 'camAngle', label: 'Angle', type: 'range', min: 0, max: 360, step: 1, default: 0, section: 'Frame' },
+    { key: 'camFlow', label: 'Flow', type: 'range', min: 0, max: 4, step: 1, default: 1, section: 'Frame' },
+    { key: 'panDir', label: 'Direction', type: 'select', options: DIR_OPTIONS, default: 'diag', when: (l) => !isBands(l), section: 'Frame' },
+    { key: 'panDir', label: 'Direction', type: 'select', options: FIELD_DIR_OPTIONS, default: 'right', noRandom: true, when: isBands, section: 'Frame' },
+    { key: 'spin', label: 'Spin', type: 'range', min: 0, max: 3, step: 1, default: 0, when: isTiles, section: 'Form' },
     // Field — along-axis travel + per-band Form (whole cycles ⇒ seamless)
-    { key: 'waveFlow', label: 'Travel', type: 'range', min: 0, max: 4, step: 1, default: 0, when: isField },
-    { key: 'fieldSway', label: 'Sway', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isField },
-    { key: 'fieldStagger', label: 'Stagger', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isField },
-    { key: 'fieldCycles', label: 'Form cycles', type: 'range', min: 1, max: 4, step: 1, default: 1, when: isField },
+    { key: 'waveFlow', label: 'Travel', type: 'range', min: 0, max: 4, step: 1, default: 0, when: isField, section: 'Frame' },
+    { key: 'fieldSway', label: 'Sway', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isField, section: 'Form' },
+    { key: 'fieldStagger', label: 'Stagger', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isField, section: 'Form' },
+    { key: 'fieldCycles', label: 'Form cycles', type: 'range', min: 1, max: 4, step: 1, default: 1, when: isField, section: 'Form' },
     // Split-gap fill (only meaningful when Direction = Split)
-    { key: 'fillMode', label: 'Split fill', type: 'select', default: 'off', when: (l) => isBands(l) && l.panDir === 'split',
+    { key: 'fillMode', label: 'Split fill', type: 'select', default: 'off', when: (l) => isBands(l) && l.panDir === 'split', section: 'Frame',
       options: [{ value: 'off', label: 'Off' }, { value: 'extend', label: 'Extend' }, { value: 'solid', label: 'Solid' }] },
-    { key: 'fillColor', label: 'Fill colour', type: 'color', default: '#101014', when: (l) => isBands(l) && l.panDir === 'split' && l.fillMode === 'solid' },
+    { key: 'fillColor', label: 'Fill colour', type: 'color', default: '#101014', when: (l) => isBands(l) && l.panDir === 'split' && l.fillMode === 'solid', section: 'Frame' },
     // Animation sweep (per-cell tiles / per-crossing weave)
-    { key: 'animAxis', label: 'Sweep axis', type: 'select', options: AXIS_OPTIONS, default: 'none', when: (l) => !isField(l) },
-    { key: 'animCycles', label: 'Sweep cycles', type: 'range', min: 1, max: 4, step: 1, default: 1, when: (l) => !isField(l) },
-    { key: 'animWaves', label: 'Sweep waves', type: 'range', min: 0, max: 8, step: 0.5, default: 2, when: (l) => !isField(l) },
-    { key: 'pulse', label: 'Pulse', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: (l) => !isField(l) },
-    { key: 'fade', label: 'Fade', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: (l) => !isField(l) },
-    { key: 'swing', label: 'Swing', type: 'range', min: 0, max: 180, step: 5, default: 0, when: isTiles },
-    { key: 'colorMix', label: 'Colour mix', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isTiles },
+    { key: 'animAxis', label: 'Sweep axis', type: 'select', options: AXIS_OPTIONS, default: 'none', when: (l) => !isField(l), section: 'Form' },
+    { key: 'animCycles', label: 'Sweep cycles', type: 'range', min: 1, max: 4, step: 1, default: 1, when: (l) => !isField(l), section: 'Form' },
+    { key: 'animWaves', label: 'Sweep waves', type: 'range', min: 0, max: 8, step: 0.5, default: 2, when: (l) => !isField(l), section: 'Form' },
+    { key: 'pulse', label: 'Pulse', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: (l) => !isField(l), section: 'Form' },
+    { key: 'fade', label: 'Fade', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: (l) => !isField(l), section: 'Form' },
+    { key: 'swing', label: 'Swing', type: 'range', min: 0, max: 180, step: 5, default: 0, when: isTiles, section: 'Form' },
+    { key: 'colorMix', label: 'Colour mix', type: 'range', min: 0, max: 1, step: 0.05, default: 0, when: isTiles, section: 'Form' },
   ],
   defaults: {
     shape: DEFAULT_SHAPE_ID,
     customSvg: '',
+    glyphChar: 'A',      // glyph tile: one char or a short run
+    glyphFont: 'base',   // fontLoader cut id (Right Grotesk width)
+    glyphWeight: 900,    // fontLoader numeric weight
     cols: 4,
     rows: 4,
     cell: 120,
@@ -339,7 +390,7 @@ export default {
     if ((p.render || 'tiles') === 'field') return drawField(ctx, u, w, h, p)
     if (p.render === 'weave') return drawWeave(ctx, u, w, h, p)
 
-    const shp = shapeFor(p.shape, p.customSvg)
+    const shp = shapeFor(p.shape, p.customSvg, p)
     if (!shp.paths.length) return
 
     const [vx, vy, vw, vh] = shp.viewBox

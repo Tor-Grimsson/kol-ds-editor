@@ -324,16 +324,36 @@ function CanvasRow({ active, collapsed, onToggleCollapse, onSelect }) {
 
 function ChildRow({
   layer, active, tinted, parentId, onSelect, onShiftSelect,
+  groupCollapsed, onToggleGroup,
   draggedId, dropTargetId, dropPosition,
   onDragStart, onDragOver, onDragLeave, onDrop, onDragEnd,
 }) {
   const handlers = useShiftClickHandlers(onSelect, onShiftSelect)
+  /* Nested containers (group-in-group) get the same hover chevron as
+   * top-level container rows — their children render recursively below. */
+  const isGroup = layer.type === 'group' || layer.type === 'bool'
   const isDragging  = draggedId === layer.id
   const isDropAbove = dropTargetId === layer.id && dropPosition === 'above'
   const isDropBelow = dropTargetId === layer.id && dropPosition === 'below'
   return (
     <div className="kol-compose-layer-line">
-      <span aria-hidden="true" className="kol-compose-layer-collapse" />
+      {isGroup ? (
+        <button
+          type="button"
+          onClick={onToggleGroup}
+          aria-expanded={!groupCollapsed}
+          title={groupCollapsed ? 'Expand group' : 'Collapse group'}
+          className="kol-compose-layer-collapse"
+        >
+          <EditorIcon
+            name="chevron-down"
+            size={10}
+            style={{ transform: groupCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 150ms' }}
+          />
+        </button>
+      ) : (
+        <span aria-hidden="true" className="kol-compose-layer-collapse" />
+      )}
       <button
         type="button"
         draggable
@@ -402,12 +422,22 @@ export function LayerStackBody() {
     setDraggedId(id)
   }
 
+  /* True when the drop container sits anywhere inside the dragged layer's
+   * own subtree (group into its own descendant) — reparentLayer rejects
+   * these as cycles, so the UI must not promise the drop. Covers every
+   * depth, not just direct children. */
+  const isIntoOwnSubtree = (targetParentId) => {
+    if (!draggedId || targetParentId == null) return false
+    const dragged = findLayerDeep(layers, draggedId)
+    return dragged != null && findLayerDeep([dragged], targetParentId) != null
+  }
+
   const onDragOver = (e, targetId, targetParentId = null) => {
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    /* No indicator on self, or when dragging a container over its own
-     * children (reparentLayer rejects cycles — don't promise the drop). */
-    if (!draggedId || draggedId === targetId || draggedId === targetParentId) {
+    /* No indicator on self, or when dragging a container into its own
+     * subtree (reparentLayer rejects cycles — don't promise the drop). */
+    if (!draggedId || draggedId === targetId || isIntoOwnSubtree(targetParentId)) {
       setDropTargetId(null)
       setDropPosition(null)
       return
@@ -428,7 +458,7 @@ export function LayerStackBody() {
    * The panel renders reversed, so visual 'above' = one past the target. */
   const onDrop = (e, targetId, targetParentId = null) => {
     e.preventDefault()
-    if (!draggedId || draggedId === targetId || draggedId === targetParentId) {
+    if (!draggedId || draggedId === targetId || isIntoOwnSubtree(targetParentId)) {
       clearDrag()
       return
     }
@@ -454,6 +484,42 @@ export function LayerStackBody() {
 
   const onDragEnd = clearDrag
 
+  /* Recursive container contents — ChildRow per child, and containers
+   * (group / bool) recurse for their own children. Each level wraps in a
+   * `kol-compose-layer-nest` ul, so indent compounds 16px per depth; the
+   * collapsedGroups set and the drag handlers are id-keyed, so collapse,
+   * selection, and drag-reorder work identically at every depth
+   * (reparentLayer + findLayerDeep both walk the full tree). */
+  const renderChildren = (parent) => (
+    <ul className="flex flex-col kol-compose-layer-nest">
+      {[...parent.children].reverse().map((child) => (
+        <li key={child.id}>
+          <ChildRow
+            layer={child}
+            active={selectedIds.includes(child.id)}
+            tinted={selectedIds.includes(parent.id)}
+            parentId={parent.id}
+            groupCollapsed={collapsedGroups.has(child.id)}
+            onToggleGroup={() => toggleGroupCollapse(child.id)}
+            onSelect={() => select(child.id)}
+            onShiftSelect={() => toggleSelection(child.id)}
+            draggedId={draggedId}
+            dropTargetId={dropTargetId}
+            dropPosition={dropPosition}
+            onDragStart={onDragStart}
+            onDragOver={onDragOver}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop}
+            onDragEnd={onDragEnd}
+          />
+          {(child.type === 'group' || child.type === 'bool') && !collapsedGroups.has(child.id)
+            && Array.isArray(child.children) && child.children.length > 0
+            && renderChildren(child)}
+        </li>
+      ))}
+    </ul>
+  )
+
   return (
     <div className="kol-compose-rail min-h-[240px]" data-layer-stack="true">
       {/* Figma frame model: Canvas is the container, every layer nests one
@@ -467,11 +533,6 @@ export function LayerStackBody() {
             onSelect={selectCanvas}
           />
         </li>
-        {layers.length === 0 && (
-          <li className="kol-helper-10 text-subtle px-2 py-2 kol-compose-layer-nest">
-            Add a layer with + or the Generative menu.
-          </li>
-        )}
         {!canvasCollapsed && [...layers].reverse().map((layer) => (
           <li key={layer.id} className="kol-compose-layer-nest">
             <LayerRow
@@ -495,30 +556,9 @@ export function LayerStackBody() {
               onDrop={onDrop}
               onDragEnd={onDragEnd}
             />
-            {(layer.type === 'group' || layer.type === 'bool') && !collapsedGroups.has(layer.id) && Array.isArray(layer.children) && layer.children.length > 0 && (
-              <ul className="flex flex-col kol-compose-layer-nest">
-                {[...layer.children].reverse().map((child) => (
-                  <li key={child.id}>
-                    <ChildRow
-                      layer={child}
-                      active={selectedIds.includes(child.id)}
-                      tinted={selectedIds.includes(layer.id)}
-                      parentId={layer.id}
-                      onSelect={() => select(child.id)}
-                      onShiftSelect={() => toggleSelection(child.id)}
-                      draggedId={draggedId}
-                      dropTargetId={dropTargetId}
-                      dropPosition={dropPosition}
-                      onDragStart={onDragStart}
-                      onDragOver={onDragOver}
-                      onDragLeave={onDragLeave}
-                      onDrop={onDrop}
-                      onDragEnd={onDragEnd}
-                    />
-                  </li>
-                ))}
-              </ul>
-            )}
+            {(layer.type === 'group' || layer.type === 'bool') && !collapsedGroups.has(layer.id)
+              && Array.isArray(layer.children) && layer.children.length > 0
+              && renderChildren(layer)}
           </li>
         ))}
       </ul>

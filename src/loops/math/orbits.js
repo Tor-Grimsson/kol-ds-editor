@@ -1,4 +1,5 @@
-import { mulberry32 } from './rng.js'
+import { mulberry32 } from '../gl/rng.js'
+import { transport } from '../../editor/params/transport.js'
 
 // Orbits (ported from kol-labs-single math/orbits/data/sim.js + the
 // OrbitsEngine adapter in math/parametric/ParametricEditor.jsx). An orbital
@@ -62,9 +63,11 @@ function stepBodies(bodies, { gravity, mutual, dt }) {
 }
 
 // ── Module-level state (trail buffer + bodies), keyed by structural sig.
+// The transport's reset epoch is part of the sig: stop/rewind bump it, so the
+// trail buffer clears and the bodies re-launch fresh (labs stop semantics).
 const STATES = new Map()
 function getState(w, h, p) {
-  const sig = [p.count, p.seed, w | 0, h | 0].join('|')
+  const sig = [p.count, p.seed, w | 0, h | 0, transport.getEpoch()].join('|')
   let s = STATES.get(sig)
   if (s) return s
   const buf = document.createElement('canvas')

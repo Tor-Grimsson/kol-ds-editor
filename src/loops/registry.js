@@ -73,9 +73,27 @@ export const presetsInGroup = (group) => PRESETS_BY_GROUP[group] || []
 export const presetsInSub = (group, sub) => presetsInGroup(group).filter((p) => p.sub === sub)
 export const presetById = (id) => PRESETS.find((p) => p.id === id) || PRESETS[0]
 
+// Off-schema keys any preset of a loop sets (e.g. iridescent freq/relief/spin,
+// sf-lava bulge). Schema keys reset via loopDefaults on every preset apply, but
+// call sites MERGE the param patch into the layer — without an explicit
+// undefined, a previous preset's off-schema keys would survive the switch and
+// render differently than a fresh insert.
+const offSchemaKeysByLoop = new Map()
+const loopOffSchemaKeys = (loopId) => {
+  let keys = offSchemaKeysByLoop.get(loopId)
+  if (!keys) {
+    const schema = new Set(Object.keys(loopDefaults(loopById(loopId))))
+    keys = [...new Set(PRESETS.filter((p) => p.loop === loopId)
+      .flatMap((p) => Object.keys(p.params || {})))].filter((k) => !schema.has(k))
+    offSchemaKeysByLoop.set(loopId, keys)
+  }
+  return keys
+}
+
 // A preset's full param object = the loop's defaults overlaid with the preset's
-// overrides.
+// overrides; off-schema keys the preset doesn't set itself clear to undefined.
 export const presetParams = (preset) => ({
+  ...Object.fromEntries(loopOffSchemaKeys(preset.loop).map((k) => [k, undefined])),
   ...loopDefaults(loopById(preset.loop)),
   ...(preset.params || {}),
 })
@@ -108,6 +126,27 @@ export const loopBgToggleable = (def) =>
       ? !!def.bgToggle
       : (def.params ?? []).some((p) => p.type === 'color' && p.role === 'bg')
   )
+
+/* Camera-drag key map for the Orbit tool. 3D scenes declare an explicit
+ * `cameraKeys: { yaw, pitch, dist }`. 2D loops don't — but the ones with a
+ * `camAngle`/`camZoom` param (field + pattern loops) get a synthesized 2D map
+ * so Orbit works on them too: horizontal drag → camAngle (rotate), wheel →
+ * camZoom (zoom). Params live in `.params` (pattern) or `.camera` (field). */
+export const resolveCameraKeys = (def) => {
+  if (!def) return null
+  if (def.cameraKeys) return def.cameraKeys
+  const has = (k) =>
+    (def.params ?? []).some((p) => p.key === k) ||
+    (def.camera ?? []).some((p) => p.key === k)
+  const keys = {}
+  if (has('camAngle')) keys.yaw = 'camAngle'
+  if (has('camZoom')) keys.dist = 'camZoom'
+  /* Shape/simple loops have no static camera — only the viewport params. They
+   * can't rotate (vpSpin is a rate, not an angle), but vpZoom is a static zoom
+   * amount, so at least wheel-zoom works. */
+  if (!keys.dist && has('vpZoom')) keys.dist = 'vpZoom'
+  return keys.yaw || keys.dist ? keys : null
+}
 
 // Params for a draw call honoring `layer.bgOn` — returns `layer` untouched
 // unless suppression applies (callers identity-check to know they must

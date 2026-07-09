@@ -15,7 +15,7 @@
  * whose seed steps floor(u·flicker) mod flicker — an INTEGER number of
  * frames per loop, frame(0) === frame(1) exactly. Everything else is static.
  */
-import { AMOUNT_PARAM, runFx } from './fxCore.js'
+import { AMOUNT_PARAM, runFx, intHash2 as hash2 } from './fxCore.js'
 
 /* ── HSL (ImageFilters.HSLAdjustment, conversions inlined) ────────────── */
 /* labs mapping: HSLAdjustment(hue·180, sat·100, value·50) with its own
@@ -438,12 +438,7 @@ function fxEnhance(sd, od, w, h) {
 }
 
 /* ── Noise (canvasEffects.applyNoise, made deterministic + loopable) ──── */
-
-function hash2(x, y) {
-  let n = (x | 0) * 374761393 + (y | 0) * 668265263
-  n = (n ^ (n >> 13)) * 1274126177
-  return ((n ^ (n >> 16)) >>> 0) / 4294967295
-}
+/* per-pixel hash — fxCore's intHash2 */
 
 function fxNoise(sd, od, w, h, q) {
   const mag = (q.noise ?? 0) * 255
@@ -577,7 +572,10 @@ export const EFFECTS_FX = [
       AMOUNT_PARAM,
     ],
     apply(ctx, src, w, h, p) {
-      runFx(ctx, src, w, h, fxBlur, { blurRadius: p.blurRadius ?? 4 }, p.amount)
+      /* radius is authored in css px; the source is dpr-backed — scale into
+       * source-pixel space (k = 1 at dpr 1 — identical). */
+      const k = src.width / w || 1
+      runFx(ctx, src, w, h, fxBlur, { blurRadius: (p.blurRadius ?? 4) * k }, p.amount)
     },
   },
   {
@@ -589,7 +587,9 @@ export const EFFECTS_FX = [
       AMOUNT_PARAM,
     ],
     apply(ctx, src, w, h, p) {
-      runFx(ctx, src, w, h, fxPixelate, { pixelSize: p.pixelSize ?? 6 }, p.amount)
+      /* block size in css px → source-pixel space (k = 1 at dpr 1). */
+      const k = src.width / w || 1
+      runFx(ctx, src, w, h, fxPixelate, { pixelSize: (p.pixelSize ?? 6) * k }, p.amount)
     },
   },
   {

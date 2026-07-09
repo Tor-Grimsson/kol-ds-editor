@@ -11,13 +11,13 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
   },
-  // kol-loader's Icon builds its registry via `import.meta.glob(...svg)`.
+  // kol-icons's Icon builds its registry via `import.meta.glob(...svg)`.
   // Globs only expand when Vite source-transforms a file — a pre-bundled
-  // node_modules dep leaves them empty, so every kol-loader icon resolves to
+  // node_modules dep leaves them empty, so every kol-icons icon resolves to
   // "not found". Excluding it from dep-optimization makes Vite process the
   // package source directly (globs + ?raw both work), populating the registry.
   optimizeDeps: {
-    exclude: ['@kolkrabbi/kol-loader'],
+    exclude: ['@kolkrabbi/kol-icons'],
   },
   // /media → the kol-media CDN, same-origin so photo filters can getImageData
   // without tainting the canvas (the CDN sends NO CORS headers; a cross-origin

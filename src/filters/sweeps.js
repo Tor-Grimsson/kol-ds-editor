@@ -6,10 +6,13 @@
  * (what it modulates — brightness fed into the cell algorithms, cell geometry,
  * or a reveal mask that wipes the effect over the raw photo).
  *
- * Labs kept an ARRAY of stacked sweeps in page state; the filter contract's
- * params ride flat on the layer, so each filter carries ONE fully-custom sweep
- * (every shape × target from the labs rig) behind an Animate toggle —
- * SWEEP_PARAMS is the shared `tab:'anim'` schema fragment.
+ * Like labs, sweeps STACK: each filter stage carries an ARRAY of sweeps in
+ * its params (`params.sweeps = [{ shape, target, enabled, amount, speed,
+ * width, angle }]`) and every enabled sweep compounds at each cell
+ * (evalSweeps — the labs combine rules: brightness adds, geometry composes,
+ * reveal max-blends). The one-click presets (Scan / Pulse / Wave / Radar /
+ * Reveal) port the labs SWEEP_PRESETS values. Filters opt in by declaring
+ * `sweeps: true` on their def; the Effects panel renders the stack UI.
  *
  * Time contract: t = the transport's u∈[0,1], woven seamlessly — Speed is
  * whole wavefront cycles per loop (integer), so frame(0) === frame(1) exactly:
@@ -18,7 +21,10 @@
  *   noise                  labs scrolled the lattice linearly (never seamless);
  *                          here the sample window ORBITS instead (cos/sin of
  *                          the phase, the glass.js drift trick) — periodic ✓
+ * The labs presets' cycles/sec speeds map to integer cycles per loop via
+ * round(speed·4) (min 1) — the closest loop-safe reading of their pace.
  */
+import { sinHash2 as hash2 } from './fxCore.js'
 
 export const SWEEP_SHAPE_OPTIONS = [
   { value: 'linear', label: 'Linear bar' },
@@ -35,21 +41,35 @@ export const SWEEP_TARGET_OPTIONS = [
 ]
 
 /* Angle only steers shapes with a travel direction (labs SweepControls). */
-const ANGLED_SHAPES = new Set(['linear', 'wave', 'angular'])
+export const ANGLED_SHAPES = new Set(['linear', 'wave', 'angular'])
 
-/* Shared `tab:'anim'` schema fragment — spread into a filter's params. Keys
- * are prefixed (sweepShape, …) so they coexist with the filter's own knobs on
- * the flat layer. Dependents are `when`-gated exactly like the labs panel:
- * everything behind Animate, Amount hidden for reveal (the mask ignores it),
- * Angle only for angled shapes. */
-export const SWEEP_PARAMS = [
-  { key: 'animate', label: 'Animate', type: 'toggle', default: false, noRandom: true, tab: 'anim', section: 'Motion' },
-  { key: 'sweepShape', label: 'Motion', type: 'select', options: SWEEP_SHAPE_OPTIONS, default: 'linear', noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate },
-  { key: 'sweepTarget', label: 'Target', type: 'select', options: SWEEP_TARGET_OPTIONS, default: 'brightness', noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate },
-  { key: 'sweepAmount', label: 'Amount', type: 'range', min: -1, max: 1, step: 0.05, default: 0.6, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate && l.sweepTarget !== 'reveal' },
-  { key: 'sweepSpeed', label: 'Speed · cycles', type: 'range', min: -4, max: 4, step: 1, default: 1, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate },
-  { key: 'sweepWidth', label: 'Width', type: 'range', min: 0.05, max: 1, step: 0.01, default: 0.35, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate },
-  { key: 'sweepAngle', label: 'Angle', type: 'range', min: 0, max: 360, step: 1, default: 0, noRandom: true, tab: 'anim', section: 'Motion', when: (l) => !!l.animate && ANGLED_SHAPES.has(l.sweepShape ?? 'linear') },
+const SWEEP_KEYS = ['shape', 'target', 'enabled', 'amount', 'speed', 'width', 'angle']
+
+/* A fresh sweep with sane defaults (brightness band drifting left→right) —
+ * labs makeSweep, minus centerX/centerY (the labs panel never exposed them;
+ * the field samplers pin 0.5, 0.5). `speed` is integer cycles per loop. */
+export function makeSweep(shape = 'linear', overrides = {}) {
+  const sw = {
+    shape,
+    target: 'brightness',
+    enabled: true,
+    amount: 0.6,   // strength applied to the chosen target (brightness/geometry)
+    speed: 1,      // wavefront cycles per LOOP (integer); negative reverses
+    width: 0.35,   // band thickness (0..1) / wavelength for the wave shape
+    angle: 0,      // travel direction in degrees (linear/wave/angular)
+  }
+  for (const k of SWEEP_KEYS) if (overrides[k] !== undefined) sw[k] = overrides[k]
+  return sw
+}
+
+/* One-click motion presets — labs SWEEP_PRESETS (sweeps.js:48-54) with the
+ * cycles/sec speeds folded to integer cycles per loop (see header). */
+export const SWEEP_PRESETS = [
+  { name: 'Scan', shape: 'linear', target: 'brightness', amount: 0.75, speed: 2, width: 0.3, angle: 0 },
+  { name: 'Pulse', shape: 'radial', target: 'brightness', amount: 0.85, speed: 1, width: 0.45 },
+  { name: 'Wave', shape: 'wave', target: 'brightness', amount: 0.6, speed: 2, width: 0.25, angle: 0 },
+  { name: 'Radar', shape: 'angular', target: 'brightness', amount: 0.8, speed: 1, width: 0.35 },
+  { name: 'Reveal', shape: 'linear', target: 'reveal', speed: 1, width: 0.4, angle: 0 },
 ]
 
 const TAU = Math.PI * 2
@@ -63,10 +83,6 @@ function band(dist, w) {
 }
 
 /* Value noise (hash-lattice, smooth-interpolated) → 0..1 — labs original. */
-function hash2(x, y) {
-  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
-  return s - Math.floor(s)
-}
 function vnoise(x, y) {
   const xi = Math.floor(x), yi = Math.floor(y)
   const xf = x - xi, yf = y - yi
@@ -77,24 +93,20 @@ function vnoise(x, y) {
   return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
 }
 
-/* Neutral packet for the no-sweep path — engines read it like evalSweep()'s. */
+/* Neutral packet for the no-sweep path — engines read it like evalSweeps()'s. */
 export const NO_SWEEP = Object.freeze({ bright: 0, scaleMul: 1, offX: 0, offY: 0, rot: 0, hasReveal: false, reveal: 0 })
 
-/**
- * Precompute one frame's sweep state from the flat layer params + transport u.
- * Returns null when Animate is off (engines take the NO_SWEEP fast path).
+/* Precompute one sweep's frame state from its object + transport u.
  * Everything per-frame-constant (angle trig, band position, phase) happens
- * here so evalSweep() stays allocation-free in the per-cell hot loop.
- */
-export function sweepState(p, u) {
-  if (!p.animate) return null
-  const cycles = Math.round(p.sweepSpeed ?? 1)
-  const a = ((p.sweepAngle ?? 0) * Math.PI) / 180
-  const width = p.sweepWidth ?? 0.35
+ * here so evalSweeps() stays allocation-free in the per-cell hot loop. */
+function sweepStateOne(sw, u) {
+  const cycles = Math.round(sw.speed ?? 1)
+  const a = ((sw.angle ?? 0) * Math.PI) / 180
+  const width = sw.width ?? 0.35
   return {
-    shape: p.sweepShape ?? 'linear',
-    target: p.sweepTarget ?? 'brightness',
-    amount: p.sweepAmount ?? 0.6,
+    shape: sw.shape ?? 'linear',
+    target: sw.target ?? 'brightness',
+    amount: sw.amount ?? 0.6,
     cos: Math.cos(a),
     sin: Math.sin(a),
     pos: wrap01(u * cycles), // band centre for linear/radial/angular
@@ -103,6 +115,70 @@ export function sweepState(p, u) {
     freq: 1 + (1 - width) * 8, // wave: narrower → more stripes (labs)
     nScale: 2 + (1 - width) * 8, // noise lattice scale (labs)
   }
+}
+
+/* Legacy flat params (the pre-chain one-sweep-per-filter rig: animate /
+ * sweepShape / sweepTarget / …) → a one-element sweep list. Kept so any
+ * un-normalized layer that still carries flat keys keeps animating. */
+function legacySweeps(p) {
+  if (!p.animate) return []
+  return [makeSweep(p.sweepShape ?? 'linear', {
+    target: p.sweepTarget ?? 'brightness',
+    amount: p.sweepAmount ?? 0.6,
+    speed: p.sweepSpeed ?? 1,
+    width: p.sweepWidth ?? 0.35,
+    angle: p.sweepAngle ?? 0,
+  })]
+}
+
+/**
+ * Precompute the frame's sweep states from a filter's params + transport u.
+ * Reads the stacked `params.sweeps` array (falling back to the legacy flat
+ * keys); returns null when nothing is enabled (engines take the NO_SWEEP
+ * fast path).
+ */
+export function sweepStates(p, u) {
+  const list = Array.isArray(p.sweeps) ? p.sweeps : legacySweeps(p)
+  let states = null
+  for (const sw of list) {
+    if (!sw || sw.enabled === false) continue
+    ;(states ??= []).push(sweepStateOne(sw, u))
+  }
+  return states
+}
+
+/* Reused scratch — evaluated per cell, consumed synchronously by the engine
+ * before the next call (labs evalSweeps contract; no hot-loop allocation). */
+const _acc = { bright: 0, scaleMul: 1, offX: 0, offY: 0, rot: 0, hasReveal: false, reveal: 0 }
+
+/**
+ * Combine every sweep's modulation at one cell into a single packet (the
+ * labs evalSweeps compound rules):
+ *   brightness → additive luma delta (± amount at each wavefront)
+ *   geometry   → scale/displace/rotate compose along each travel direction
+ *   reveal     → max-blended mask; the engine gates the cell (raw photo
+ *                underlay shows) when reveal < 0.5
+ */
+export function evalSweeps(states, nx, ny) {
+  _acc.bright = 0; _acc.scaleMul = 1; _acc.offX = 0; _acc.offY = 0
+  _acc.rot = 0; _acc.hasReveal = false; _acc.reveal = 0
+  for (let i = 0; i < states.length; i++) {
+    const st = states[i]
+    const s = sample(st, nx, ny)
+    if (st.target === 'reveal') {
+      _acc.hasReveal = true
+      if (s > _acc.reveal) _acc.reveal = s
+    } else if (st.target === 'geometry') {
+      const k = s * st.amount
+      _acc.scaleMul *= 1 + k
+      _acc.offX += st.cos * k
+      _acc.offY += st.sin * k
+      _acc.rot += k
+    } else {
+      _acc.bright += s * st.amount
+    }
+  }
+  return _acc
 }
 
 /* One sweep's wavefront value at a normalized cell (nx,ny ∈ 0..1) — the labs
@@ -137,36 +213,6 @@ function sample(st, nx, ny) {
   }
 }
 
-/* Reused scratch — evaluated per cell, consumed synchronously by the engine
- * before the next call (labs evalSweeps contract; no hot-loop allocation). */
-const _acc = { bright: 0, scaleMul: 1, offX: 0, offY: 0, rot: 0, hasReveal: false, reveal: 0 }
-
-/**
- * The sweep's modulation packet at one cell:
- *   brightness → additive luma delta (± amount at the wavefront)
- *   geometry   → scale/displace/rotate the cell along the travel direction
- *   reveal     → mask; the engine gates the cell (raw photo underlay shows)
- *                when reveal < 0.5
- */
-export function evalSweep(st, nx, ny) {
-  _acc.bright = 0; _acc.scaleMul = 1; _acc.offX = 0; _acc.offY = 0
-  _acc.rot = 0; _acc.hasReveal = false; _acc.reveal = 0
-  const s = sample(st, nx, ny)
-  if (st.target === 'reveal') {
-    _acc.hasReveal = true
-    _acc.reveal = s
-  } else if (st.target === 'geometry') {
-    const k = s * st.amount
-    _acc.scaleMul = 1 + k
-    _acc.offX = st.cos * k
-    _acc.offY = st.sin * k
-    _acc.rot = k
-  } else {
-    _acc.bright = s * st.amount
-  }
-  return _acc
-}
-
-/* True when the frame's sweep wipes the effect — engines draw the raw photo
- * underneath first so gated-off cells show it (labs hasRevealSweep). */
-export const isReveal = (st) => !!st && st.target === 'reveal'
+/* True when any of the frame's sweeps wipes the effect — engines draw the raw
+ * photo underneath first so gated-off cells show it (labs hasRevealSweep). */
+export const anyReveal = (states) => !!states && states.some((st) => st.target === 'reveal')

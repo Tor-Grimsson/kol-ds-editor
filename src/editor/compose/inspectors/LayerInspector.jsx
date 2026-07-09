@@ -2,12 +2,11 @@ import { useRef, useState } from 'react'
 import EditorButton from '../../components/EditorButton'
 import MediaPicker from '../../library/MediaPicker'
 import { proxied, isVideoType } from '../../library/mediaLibrary'
-import { Input } from '@kolkrabbi/kol-component'
 import { Dropdown } from '@kolkrabbi/kol-component'
 import { LabeledControl } from '@kolkrabbi/kol-component'
 import { Slider } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
-import { Icon } from '@kolkrabbi/kol-loader'
+import { Icon } from '@kolkrabbi/kol-icons'
 import { useComposeState, COVER_TYPES } from '../state'
 import { scalePathNodes } from '../path-math'
 import EditorIcon from '../../icons/EditorIcon'
@@ -16,10 +15,11 @@ import { useColorTarget } from '../../color/useColorTarget'
 import { ColorField } from './ColorField'
 import BindDot from '../../params/BindDot'
 import { BLEND_MODES } from '../LayerStack'
-import { filterById } from '../../../filters'
+import { firstFilterDef } from '../filterChain'
 import { loopById, loopBgToggleable } from '../../../loops/registry'
 import { MISC_TREE } from '../../../loops/taxonomy'
 import { LoopPicker } from './LoopPicker'
+import { NumberField } from './NumberField'
 
 /**
  * LayerInspector — HIGH-LEVEL surface for the selected layer (Phase 6-A):
@@ -53,8 +53,8 @@ export default function LayerInspector({ layer }) {
             <AxisField
               label="R"
               value={typeof layer.rotation === 'number' ? Math.round(layer.rotation) : 0}
-              onChange={(e) => {
-                const n = Number(e.target.value)
+              onCommit={(raw) => {
+                const n = Number(raw)
                 setProp('rotation', Number.isFinite(n) ? ((Math.round(n) % 360) + 360) % 360 : 0)
               }}
             />
@@ -66,7 +66,7 @@ export default function LayerInspector({ layer }) {
             <div className="flex items-center gap-1 shrink-0">
               <FlipButton axis="h" layer={layer} flipLayer={flipLayer} />
               <FlipButton axis="v" layer={layer} flipLayer={flipLayer} />
-              {layer.type === 'photo' && layer.srcType !== 'video' && (
+              {layer.type === 'photo' && (
                 <button
                   type="button"
                   onClick={() => window.dispatchEvent(new CustomEvent('kol:enter-crop', { detail: layer.id }))}
@@ -176,7 +176,9 @@ function ParamsLink({ layer }) {
   /* Engine (GL) loops can't host effects yet (no GL source path) — showing
    * the row would open Parameters onto nothing (review r3). */
   const engineLoop = layer.type === 'loop' && loopById(layer.loopId)?.kind === 'engine'
-  const fx = EFFECTABLE.has(layer.type) ? filterById(layer.filterId) : null
+  /* Chain-aware: the row labels with the FIRST stage's filter (the chain's
+   * head); the Effects tab shows the full stack. */
+  const fx = EFFECTABLE.has(layer.type) ? firstFilterDef(layer) : null
   const showEffect = EFFECTABLE.has(layer.type) && !engineLoop
   if (!labelFor && !showEffect) return null
   return (
@@ -230,6 +232,7 @@ function ImageSource({ layer, patch }) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const onPick = (e) => {
     const file = e.target.files?.[0]
+    e.target.value = '' /* allow re-picking the same file */
     if (!file) return
     const reader = new FileReader()
     reader.onload = () => patch({ src: reader.result, srcType: 'image' })
@@ -324,8 +327,10 @@ function FlipButton({ axis, layer, flipLayer }) {
  * `chars` makes the inner input hug a fixed width (the shell never grows on
  * focus — the old ghost/flex-1 combo let a focused input stretch past the
  * rail and force horizontal scroll; review item 7). Filled variant matches
- * the stroke panel's Weight field. */
-function AxisField({ label, value, onChange }) {
+ * the stroke panel's Weight field. Draft/commit via the shared NumberField —
+ * a per-keystroke commit turns typing '-45' into NaN→0 at the bare '-'
+ * and reshapes the layer at every intermediate digit. */
+function AxisField({ label, value, onCommit }) {
   return (
     <div className="flex items-center gap-1.5 flex-1 min-w-0">
       <span
@@ -334,7 +339,11 @@ function AxisField({ label, value, onChange }) {
       >
         {label}
       </span>
-      <Input variant="filled" size="sm" type="number" chars={5} value={value} onChange={onChange} />
+      <NumberField
+        variant="filled" size="sm" chars={5}
+        value={value}
+        onCommit={onCommit}
+      />
     </div>
   )
 }
@@ -372,8 +381,8 @@ function PositionFields({ layer, setProp, patch }) {
       ...(layer.holes?.length ? { holes: layer.holes.map((r) => scalePathNodes(r, sx, sy)) } : {}),
     }
   }
-  const onChangeW = (e) => {
-    const w = Math.max(8, num(e.target.value))
+  const onChangeW = (raw) => {
+    const w = Math.max(8, num(raw))
     if (aspectLocked) {
       patch(withPathScale({ w, h: Math.max(8, Math.round(w / aspect)) }))
     } else if (isPath) {
@@ -382,8 +391,8 @@ function PositionFields({ layer, setProp, patch }) {
       setProp('w', w)
     }
   }
-  const onChangeH = (e) => {
-    const h = Math.max(8, num(e.target.value))
+  const onChangeH = (raw) => {
+    const h = Math.max(8, num(raw))
     if (aspectLocked) {
       patch(withPathScale({ w: Math.max(8, Math.round(h * aspect)), h }))
     } else if (isPath) {
@@ -396,14 +405,14 @@ function PositionFields({ layer, setProp, patch }) {
     <LabeledControl label="Position">
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
-          <AxisField label="X" value={Math.round(layer.x)} onChange={(e) => setProp('x', num(e.target.value))} />
-          <AxisField label="Y" value={Math.round(layer.y)} onChange={(e) => setProp('y', num(e.target.value))} />
+          <AxisField label="X" value={Math.round(layer.x)} onCommit={(raw) => setProp('x', num(raw))} />
+          <AxisField label="Y" value={Math.round(layer.y)} onCommit={(raw) => setProp('y', num(raw))} />
           {/* spacer matching the lock button below so both rows' inputs align */}
           <span className="w-5 shrink-0" aria-hidden="true" />
         </div>
         <div className="flex items-center gap-2">
-          <AxisField label="W" value={Math.round(layer.w)} onChange={onChangeW} />
-          <AxisField label="H" value={Math.round(layer.h)} onChange={onChangeH} />
+          <AxisField label="W" value={Math.round(layer.w)} onCommit={onChangeW} />
+          <AxisField label="H" value={Math.round(layer.h)} onCommit={onChangeH} />
           <button
             type="button"
             onClick={toggleLock}

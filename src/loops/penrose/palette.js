@@ -18,9 +18,20 @@ export const PALETTE = {
 }
 export const setPalette = (vars) => Object.assign(PALETTE, vars)
 
-// Live per-role opacity multipliers. The prototypes draw most elements at low
-// authored alpha; these scale each role's alpha (1 = as authored). The editor
-// exposes no Edit-tab opacity controls, so these stay at 1 — kept because
-// pc() and the tint read them.
-export const OPACITY = { fg: 1, accent: 1, dim: 1, warm: 1 }
+// Live per-role opacity multipliers (0–5; 1 = as authored). The prototypes
+// draw most elements at low authored alpha; pc() and the tint scale each
+// role's alpha by these. dim defaults to 5 — labs PenrosePage boots with
+// { fg: 1, accent: 1, dim: 5, warm: 1 }, so dim at 1 rendered the editor's
+// dim strokes 5× fainter than labs (the silent visual-parity bug).
+export const OPACITY = { fg: 1, accent: 1, dim: 5, warm: 1 }
 export const setOpacity = (o) => Object.assign(OPACITY, o)
+
+// Layer params → the live singleton (labs setOpacity(opacity) parity). The
+// penrose host calls this next to syncPalette once the four role-opacity
+// schema entries land (fgOpacity/accentOpacity/dimOpacity/warmOpacity).
+export const syncOpacity = (p) => setOpacity({
+  fg: p.fgOpacity ?? 1,
+  accent: p.accentOpacity ?? 1,
+  dim: p.dimOpacity ?? 5,
+  warm: p.warmOpacity ?? 1,
+})

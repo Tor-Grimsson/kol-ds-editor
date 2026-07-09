@@ -33,6 +33,27 @@
 //
 // PrimitiveEngine already satisfies this for 3d; LoopPlayer2D satisfies it for 2d.
 
+import { VP_PARAMS, VP_DEFAULTS } from './lib/viewport.js'
+import { SHAPE_LOOPS } from './shape/presets.js'
+import patternRules from './pattern/patternLoop.js'
+
+/* ── Viewport-camera fold ─────────────────────────────────────────────────
+ * The universal 2d camera (lib/viewport.js) attaches at the CONTRACT layer:
+ * eligible defs get the vp* schema params appended once at module load, so
+ * the inspector renders them and loopDefaults below folds their defaults into
+ * new layers — no per-def edits. Eligible = the groups labs applied it to:
+ * shape (Simple) + pattern-rules (the Pattern/Pattern-Loops vehicle). Field
+ * loops keep their own `camera` schema; sims/penrose/optic stay bare (their
+ * frame is history, a wrapping camera on top is still valid but un-schema'd).
+ * pattern-rules declares `defaults` directly (the escape hatch), so its vp
+ * defaults merge there too. Idempotent under HMR re-eval. */
+for (const def of [...SHAPE_LOOPS, patternRules]) {
+  if (def?.params && !def.params.some((p) => p.key === 'vpSpin')) {
+    def.params = [...def.params, ...VP_PARAMS]
+    if (def.defaults) Object.assign(def.defaults, VP_DEFAULTS)
+  }
+}
+
 // Build the initial param object for a loop. A loop with a complex param shape
 // (e.g. the pattern loop's rules array) declares a `defaults` object directly;
 // otherwise we assemble it from the declarative `params` + `camera` schemas.

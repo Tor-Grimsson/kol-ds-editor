@@ -8,9 +8,11 @@ import { useCallback, useEffect, useState } from 'react'
  * changes live.
  *
  * The inline boot script in index.html applies the stored mode BEFORE the
- * bundle paints (no flash); this module owns runtime changes. Mount does NOT
- * force a theme, so an embedded <DesignEditor> respects the host's data-theme
- * until the user picks one.
+ * bundle paints (no flash); this module owns runtime changes. Nothing is
+ * applied at import time. An embedded <DesignEditor> applies the persisted
+ * mode at component mount (index.jsx) — but only when one is actually stored
+ * (hasStoredThemeMode), so a fresh embed respects the host's data-theme
+ * until the user picks a mode.
  *
  * ponytail: no context/store — only the Settings menu reads the mode, so a
  * hook over localStorage is the whole mechanism.
@@ -19,6 +21,12 @@ const KEY = 'kol-editor-theme'
 const prefersDark = () => window.matchMedia('(prefers-color-scheme: dark)')
 
 export const getThemeMode = () => localStorage.getItem(KEY) || 'system'
+
+/* Has the user ever picked a mode? Gates mount-application in the embedded
+ * build — no stored pick means the host's data-theme stays untouched. */
+export const hasStoredThemeMode = () => {
+  try { return localStorage.getItem(KEY) != null } catch { return false }
+}
 
 const resolve = (mode) =>
   mode === 'system' ? (prefersDark().matches ? 'dark' : 'light') : mode

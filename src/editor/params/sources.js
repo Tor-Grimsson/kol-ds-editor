@@ -21,6 +21,7 @@
  */
 import { readAudio, isAudioEnabled, enableAudio } from './audioBands'
 import { enableMidi, isMidiEnabled, readCC, anyCCSeen } from './midi'
+import { GAMEPAD_SOURCES, padConnected } from './gamepad'
 import { compileExpr } from './expr'
 /* Import cycle with ./transport (it imports anyLiveSourceActive) — safe:
  * both sides only dereference the other inside functions, never at module
@@ -138,12 +139,17 @@ registerSource({
   },
 })
 
-/* ── gamepad — first pad's left stick, -1..1 → 0..1 (poll-only API). ──── */
+/* ── gamepad — full pad source set (both sticks' axes, L2/R2 triggers, face +
+ *    shoulder buttons, and derived stick angle/force), poll-only API. Each
+ *    reads navigator.getGamepads() live inside sample(); the transport re-
+ *    samples every frame while a pad is active (no second poll loop). The
+ *    descriptor list + LEARN live in ./gamepad. ─────────────────────────── */
 
-const padAxis = (n) => {
-  const pad = typeof navigator !== 'undefined' && navigator.getGamepads?.()[0]
-  return pad ? (pad.axes[n] + 1) / 2 : 0
+for (const g of GAMEPAD_SOURCES) {
+  registerSource({ id: g.id, label: g.label, live: true, active: padConnected, sample: g.read })
 }
-const padActive = () => typeof navigator !== 'undefined' && !!navigator.getGamepads?.()[0]
-registerSource({ id: 'padX', label: 'Joystick X', live: true, active: padActive, sample: () => padAxis(0) })
-registerSource({ id: 'padY', label: 'Joystick Y', live: true, active: padActive, sample: () => padAxis(1) })
+/* Back-compat: pre-expansion bindings stored source 'padX'/'padY' (the left
+ * stick). Alias to the same axes, hidden from the bind menu (pad-leftX /
+ * pad-leftY show in their place). */
+registerSource({ id: 'padX', label: 'Joystick X', hidden: true, live: true, active: padConnected, sample: GAMEPAD_SOURCES[0].read })
+registerSource({ id: 'padY', label: 'Joystick Y', hidden: true, live: true, active: padConnected, sample: GAMEPAD_SOURCES[1].read })

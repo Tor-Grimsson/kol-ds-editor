@@ -20,22 +20,25 @@
 // live keys (declared per proto in presets.js) or colours instead.
 
 import { loadFonts as loadEditorFonts, FONTS as EDITOR_FONTS } from '../../kinetic/fonts.js'
+import { transport } from '../../editor/params/transport.js'
 import { themeById, DEFAULT_THEME } from '../lib/themes.js'
-import { setPalette } from './palette.js'
+import { setPalette, syncOpacity } from './palette.js'
 import { makeSDF, setLoopClock, collectSteps } from './common.js'
 import { makeMapper, tintedContext } from './tint.js'
 import { rasterizeGlyph, computeSDF } from './sdf.js'
 import { rasterizeShape, SHAPE_SOURCES } from './shapes.js'
-import { mulberry32 } from './prng.js'
+import { mulberry32 } from '../gl/rng.js'
 import { defaultValues } from './knobs.js'
 
 const DURATION = 8      // seconds per u-cycle (transport loop length)
 const CLOCK_RATE = 0.5  // labs SquishyClock default speed — protos that read
                         // clock.nowSeconds() were tuned against half-rate time
-const LOGICAL = 960     // labs logical artboard res — SDF/sim space is baked at
-                        // this scale (contain-fit to the layer aspect) so every
-                        // generation param behaves exactly as tuned in labs,
-                        // independent of the layer's pixel size
+const LOGICAL = 960     // default logical artboard res (the labs bake scale) —
+                        // SDF/sim space is baked at this scale (contain-fit to
+                        // the layer aspect) so every generation param behaves
+                        // exactly as tuned in labs, independent of the layer's
+                        // pixel size. The `resolution` param overrides it per
+                        // layer (structural — re-inits the sim).
 
 /* ── shared schema (every penrose loop gets these ahead of its own knobs) ── */
 
@@ -49,6 +52,7 @@ const MASK_PARAMS = [
   { key: 'font', label: 'Font', type: 'select', default: DEFAULT_FONT, tab: 'generate', when: isGlyph, options: EDITOR_FONTS.map((f) => ({ value: f.family, label: f.label })) },
   { key: 'weight', label: 'Weight', type: 'select', default: '700', tab: 'generate', when: isGlyph, options: ['300', '400', '500', '700', '900'].map((w) => ({ value: w, label: w })) },
   { key: 'seed', label: 'Seed', type: 'range', min: 1, max: 99, step: 1, default: 1, tab: 'generate', noRandom: true },
+  { key: 'resolution', label: 'Resolution', type: 'range', min: 480, max: 1920, step: 60, default: LOGICAL, tab: 'generate', noRandom: true },
 ]
 
 /* Five-role colour params. bg/fg/accent are patched by the editor's theme
@@ -61,6 +65,12 @@ const COLOR_PARAMS = [
   { key: 'accent', label: 'Accent', type: 'color', role: 'accent', default: T.accent },
   { key: 'dim', label: 'Dim', type: 'color', role: 'dim', default: T.dim },
   { key: 'warm', label: 'Warm', type: 'color', role: 'warm', default: T.warm },
+  /* Per-role opacity boosters (labs settings.js 0–5 model; dim boots at 5 —
+   * prototypes author dim strokes at very low alpha and rely on the boost). */
+  { key: 'fgOpacity', label: 'Foreground opacity', type: 'range', min: 0, max: 5, step: 0.1, default: 1 },
+  { key: 'accentOpacity', label: 'Accent opacity', type: 'range', min: 0, max: 5, step: 0.1, default: 1 },
+  { key: 'dimOpacity', label: 'Dim opacity', type: 'range', min: 0, max: 5, step: 0.1, default: 5 },
+  { key: 'warmOpacity', label: 'Warm opacity', type: 'range', min: 0, max: 5, step: 0.1, default: 1 },
 ]
 
 /* ── labs param schema → editor schema grammar ────────────────────────────
@@ -114,9 +124,12 @@ const STATES = new Map()
 const CAP = 4
 
 function getState(proto, structuralKeys, w, h, p) {
+  /* The transport's reset epoch is structural: stop/rewind bump it, so the
+   * proto instance rebuilds (init re-runs) and the generative run starts
+   * fresh — the LRU no longer lets sim state survive a stop. */
   const sig = [
     proto.id, p.shape ?? 'glyph', p.glyph ?? 'A', p.font ?? '', p.weight ?? '700',
-    p.seed ?? 1, w | 0, h | 0,
+    p.seed ?? 1, p.resolution ?? LOGICAL, w | 0, h | 0, transport.getEpoch(),
     ...structuralKeys.map((k) => `${k}:${p[k]}`),
   ].join('|')
   let s = STATES.get(sig)
@@ -163,10 +176,13 @@ function createState(proto, w, h, p) {
     speed: CLOCK_RATE,
   }
 
-  /* SDF/sim space: contain the layer aspect in a LOGICAL box (labs parity —
-   * labs baked a square 960 mask; non-square layers keep 960 on the long side
-   * so radii/step params mean the same thing they did in labs). */
-  const k = LOGICAL / Math.max(bw, bh)
+  /* SDF/sim space: contain the layer aspect in a logical box (labs parity —
+   * labs baked a square 960 mask; non-square layers keep the logical res on
+   * the long side so radii/step params mean the same thing they did in labs).
+   * The `resolution` param scales the bake: higher = finer sim detail,
+   * heavier init. */
+  const logical = Math.max(480, Math.min(1920, Math.round(p.resolution ?? LOGICAL)))
+  const k = logical / Math.max(bw, bh)
   const mw = Math.max(8, Math.round(bw * k))
   const mh = Math.max(8, Math.round(bh * k))
 
@@ -226,6 +242,7 @@ export function protoLoop(proto, opts = {}) {
     // u only gates stepping (pauses with the transport) — see header.
     draw(ctx, u, w, h, p) {
       const paletteSig = syncPalette(p)
+      syncOpacity(p)
       const s = getState(proto, structuralKeys, w, h, p)
       if (s.paletteSig !== paletteSig) {
         s.paletteSig = paletteSig

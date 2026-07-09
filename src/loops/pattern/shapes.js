@@ -24,9 +24,10 @@ const PRIMITIVES = [
   { id: 'prim:star', label: 'star', d: 'M12 2 L14.9 9.2 L22.5 9.6 L16.6 14.5 L18.6 21.9 L12 17.7 L5.4 21.9 L7.4 14.5 L1.5 9.6 L9.1 9.2 Z' },
 ]
 
-// No 'glyph' entry in this port — the labs glyph tile pulled letterforms via
-// opentype.js (lib/glyphPath.js), which the editor deliberately excludes.
+// 'glyph' resolves in patternLoop's shapeFor via glyphTile.js (Right Grotesk
+// outlines through the type mode's fontLoader — opentype.js is already a dep).
 export const SHAPE_OPTIONS = [
+  { value: 'glyph', label: 'Glyph (type)' },
   ...PRIMITIVES.map((s) => ({ value: s.id, label: s.label })),
   ...ABSTRACTS.map((s) => ({ value: s.id, label: s.label })),
   { value: 'custom', label: 'Custom SVG…' },
@@ -42,9 +43,23 @@ function parseSvg(svg) {
   return { viewBox: vb.length === 4 && vb.every((n) => Number.isFinite(n)) ? vb : [0, 0, 24, 24], paths }
 }
 
+// Sanitize a user-pasted SVG string before it reaches any renderer. The loop
+// itself only regex-lifts <path d> into Path2D (inert), but the string rides on
+// saved docs/presets and may reach innerHTML/image consumers — strip script
+// blocks, foreignObject, inline event handlers and script-bearing URLs up front.
+export function sanitizeSvg(svg) {
+  if (!svg) return ''
+  return String(svg)
+    .replace(/<script[\s\S]*?(?:<\/script\s*>|$)/gi, '')
+    .replace(/<foreignObject[\s\S]*?(?:<\/foreignObject\s*>|$)/gi, '')
+    .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/data:text\/html[^"'\s>]*/gi, '')
+}
+
 // id (+ custom svg) → { viewBox, paths }
 export function resolveShape(id, customSvg = '') {
-  if (id === 'custom') return parseSvg(customSvg)
+  if (id === 'custom') return parseSvg(sanitizeSvg(customSvg))
   const prim = PRIMITIVES.find((s) => s.id === id)
   if (prim) return { viewBox: [0, 0, 24, 24], paths: [prim.d] }
   const ab = ABSTRACTS.find((s) => s.id === id)

@@ -3,15 +3,18 @@ import { MenuItem, MenuDropdownItem, MenuDropdownDivider, MenuDropdownNest } fro
 import { Input, useModal } from '@kolkrabbi/kol-component'
 import EditorIcon from '../icons/EditorIcon'
 import { useThemeMode } from '../theme'
+import { useAppSettings, setAppSetting } from '../lib/appSettings'
+import { THEME_OPTIONS } from '../../loops/lib/themes'
 import { ASPECTS } from './aspects'
 import { useComposeState } from '../compose/state'
 import { useGeneratorLibrary } from '../library/LibraryProvider'
 import { STARTERS } from '../library/starters'
 import { useComposeFile } from '../compose/useComposeFile'
+import { goMobile } from '../mobile/device'
 import { findLayerDeep } from '../compose/helpers'
 import { isBooleanable } from '../compose/boolean-ops'
-import { FILTERS } from '../../filters'
-import { schemaDefaults } from '../params/schema'
+import { FILTERS, filterById } from '../../filters'
+import { bareChain } from '../compose/filterChain'
 import { loopById, groupById, presetsInGroup, presetsInSub, presetParams } from '../../loops/registry'
 import { GENERATIVE_TREE } from '../../loops/taxonomy'
 import { effectCategories } from '../compose/inspectors/effectCategories'
@@ -39,7 +42,7 @@ export default function MenuTop() {
   const {
     aspect, setAspect,
     view, setView,
-    layers, selectedId, selectedIds, updateLayer, addLayer,
+    layers, selectedId, selectedIds, updateLayer, addLayer, addFilter,
     flattenSelected, releaseBoolean,
     canUndo, canRedo, undo, redo,
     clearLayers,
@@ -51,6 +54,10 @@ export default function MenuTop() {
   const { library } = useGeneratorLibrary()
   const modal = useModal()
   const [themeMode, setThemeMode] = useThemeMode()
+  /* Global app defaults (appSettings) — the loop palette theme / autoplay /
+   * clip-to-frame / default aspect edited from the Settings menu; distinct
+   * from the light/dark UI theme above. */
+  const appSettings = useAppSettings()
 
   const openColorModal = () => window.dispatchEvent(new CustomEvent('kol:open-color-modal'))
 
@@ -64,23 +71,29 @@ export default function MenuTop() {
   const startTitleEdit = () => { setTitleDraft(currentPresetName ?? ''); setEditingTitle(true) }
   const commitTitle    = () => { setEditingTitle(false); setCurrentPresetName(titleDraft.trim() || null) }
 
-  /* Effects menu (Phase 7) — apply a filter to the selected layer and jump
-   * to the Effects tab. Engine (GL) filters need an image source: photo
-   * layers get the full catalog, other positioned layers the canvas set;
-   * engine (GL) loops can't host effects yet (no GL source path). */
+  /* Effects menu (Phase 7 + chain) — ADD a filter stage to the selected
+   * layer's chain and jump to the Effects tab. Engine (GL) filters need a
+   * pixel source: photo layers AND 2d loop layers get the full catalog
+   * (the loop's live canvas feeds the engine), other positioned layers the
+   * canvas set; engine (GL) loops can't host effects (no GL source path).
+   * One engine stage max — engine options drop out while one is present. */
   const fxLayer = selectedId && selectedId !== 'canvas' ? findLayerDeep(layers, selectedId) : null
   const fxEngineLoop = fxLayer?.type === 'loop' && loopById(fxLayer.loopId)?.kind === 'engine'
   const fxTarget = fxLayer && !fxEngineLoop && ['shape', 'text', 'pattern', 'path', 'loop', 'misc', 'photo'].includes(fxLayer.type) ? fxLayer : null
+  const fxChain = fxTarget ? bareChain(fxTarget) : []
+  const fxHasEngine = fxChain.some((s) => filterById(s.id)?.kind === 'engine')
+  const fxEngineHost = fxTarget && (fxTarget.type === 'photo' || fxTarget.type === 'loop' || fxTarget.type === 'misc')
   const fxOptions = fxTarget
-    ? FILTERS.filter((f) => fxTarget.type === 'photo' || f.kind !== 'engine')
+    ? FILTERS.filter((f) => f.kind !== 'engine' || (fxEngineHost && !fxHasEngine))
     : []
+  const fxInChain = (id) => fxChain.some((s) => s.id === id)
   const applyEffect = (f) => {
     if (!fxTarget) return
-    updateLayer(fxTarget.id, { filterId: f.id, ...schemaDefaults(f.params) })
+    addFilter(fxTarget.id, f.id)
     window.dispatchEvent(new CustomEvent('kol:open-effects'))
   }
   const clearEffect = () => {
-    if (fxTarget) updateLayer(fxTarget.id, { filterId: null })
+    if (fxTarget) updateLayer(fxTarget.id, { filters: [] })
   }
 
   /* Generative menu — the app hierarchy (METHOD > TYPE > CATEGORY > PRESET,
@@ -138,8 +151,21 @@ export default function MenuTop() {
 
   const confirmReplaceIfUnsaved = async () => {
     if (layers.length === 0) return true
-    if (currentPresetId)      return true
+    /* A loaded preset only skips the confirm while it's untouched — canUndo
+     * doubles as the dirty signal (edits since load push history), so a
+     * MODIFIED saved canvas still confirms before being replaced. */
+    if (currentPresetId && !canUndo) return true
     return modal.confirm('Discard the current canvas? Unsaved changes will be lost.')
+  }
+
+  /* New — a fresh default document. Clears the persisted draft and reloads so
+   * EVERY piece of state (aspect, palette, title, canvas fills, history)
+   * returns to its default in one shot; an in-place reset would risk leaving
+   * one behind. Confirm first — this discards the current canvas. */
+  const onNew = async () => {
+    if (!(await confirmReplaceIfUnsaved())) return
+    try { localStorage.removeItem('kol.editor.draft') } catch { /* ignore */ }
+    window.location.reload()
   }
 
   /* Open a library item in place: palettes load into the live palette and
@@ -219,7 +245,7 @@ export default function MenuTop() {
               <div className="kol-helper-10 text-subtle px-3 py-1">Select a layer to apply an effect</div>
             ) : (
               <>
-                <MenuDropdownItem onClick={clearEffect} disabled={!fxTarget.filterId}>
+                <MenuDropdownItem onClick={clearEffect} disabled={fxChain.length === 0}>
                   None
                 </MenuDropdownItem>
                 <MenuDropdownDivider />
@@ -229,7 +255,7 @@ export default function MenuTop() {
                       <MenuDropdownItem
                         key={f.id}
                         onClick={() => applyEffect(f)}
-                        shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
+                        shortcut={fxInChain(f.id) ? <EditorIcon name="check" size={11} /> : undefined}
                       >
                         {f.label}
                       </MenuDropdownItem>
@@ -247,7 +273,7 @@ export default function MenuTop() {
                 <MenuDropdownItem
                   key={f.id}
                   onClick={() => applyEffect(f)}
-                  shortcut={fxTarget.filterId === f.id ? <EditorIcon name="check" size={11} /> : undefined}
+                  shortcut={fxInChain(f.id) ? <EditorIcon name="check" size={11} /> : undefined}
                 >
                   {f.label}
                 </MenuDropdownItem>
@@ -286,6 +312,10 @@ export default function MenuTop() {
 
         <MenuItem label="File" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
+            <MenuDropdownItem onClick={onNew}>
+              New
+            </MenuDropdownItem>
+            <MenuDropdownDivider />
             <MenuDropdownItem onClick={onSave}>
               {currentPresetId ? 'Save' : 'Save…'}
             </MenuDropdownItem>
@@ -347,6 +377,12 @@ export default function MenuTop() {
 
         <MenuItem label="Settings" panelClassName="z-[1000]">
           <div className="py-1 w-[220px]">
+            {/* Enter the touch-device generative chrome from desktop — a
+                simple generate + randomize surface (see editor/mobile). */}
+            <MenuDropdownItem onClick={goMobile}>
+              Simple mode
+            </MenuDropdownItem>
+            <MenuDropdownDivider />
             <MenuDropdownItem
               onClick={toggleGrid}
               shortcut={showGrid ? <EditorIcon name="check" size={11} /> : undefined}
@@ -369,6 +405,44 @@ export default function MenuTop() {
                 </MenuDropdownItem>
               ))}
             </MenuDropdownNest>
+            <MenuDropdownDivider />
+            {/* Global defaults (appSettings) — seed new canvases / loop layers.
+                The Loop theme is the generative palette theme, NOT the light/
+                dark UI theme above. */}
+            <MenuDropdownNest label="Default aspect">
+              {ASPECT_OPTIONS.filter((opt) => opt.value !== 'custom').map((opt) => (
+                <MenuDropdownItem
+                  key={opt.value}
+                  onClick={() => setAppSetting('defaultAspect', opt.value)}
+                  shortcut={appSettings.defaultAspect === opt.value ? <EditorIcon name="check" size={11} /> : undefined}
+                >
+                  {opt.label}
+                </MenuDropdownItem>
+              ))}
+            </MenuDropdownNest>
+            <MenuDropdownNest label="Loop theme">
+              {THEME_OPTIONS.map((opt) => (
+                <MenuDropdownItem
+                  key={opt.value}
+                  onClick={() => setAppSetting('defaultTheme', opt.value)}
+                  shortcut={appSettings.defaultTheme === opt.value ? <EditorIcon name="check" size={11} /> : undefined}
+                >
+                  {opt.label}
+                </MenuDropdownItem>
+              ))}
+            </MenuDropdownNest>
+            <MenuDropdownItem
+              onClick={() => setAppSetting('autoplay', !appSettings.autoplay)}
+              shortcut={appSettings.autoplay ? <EditorIcon name="check" size={11} /> : undefined}
+            >
+              Autoplay
+            </MenuDropdownItem>
+            <MenuDropdownItem
+              onClick={() => setAppSetting('clipToFrame', !appSettings.clipToFrame)}
+              shortcut={appSettings.clipToFrame ? <EditorIcon name="check" size={11} /> : undefined}
+            >
+              Clip to frame
+            </MenuDropdownItem>
           </div>
         </MenuItem>
 

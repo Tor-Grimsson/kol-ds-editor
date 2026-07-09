@@ -29,11 +29,14 @@ import EditorIcon from '../icons/EditorIcon'
  * No z-index, no transform. Click either circle → onSwap. */
 const FILL_SLOT   = { left: 5,  top: 6  }
 const STROKE_SLOT = { left: 15, top: 16 }
+/* Swatch ring — surface-coloured gap + fg-based outline so it reads on both
+ * themes (dark: ≈ the original #000 + #505050 pair). */
+const SWATCH_RING = '0 0 0 1px var(--kol-surface-primary), 0 0 0 2px var(--kol-fg-32)'
 const CHIP_BASE   = {
   position: 'absolute',
   width: 22, height: 22,
   borderRadius: '50%',
-  boxShadow: '0 0 0 1px #000, 0 0 0 2px #505050',
+  boxShadow: SWATCH_RING,
   border: 'none', padding: 0, cursor: 'pointer',
 }
 
@@ -112,7 +115,7 @@ function FramedSwatch({ shape = 'square', size = 28, color = '#FFFFFF', classNam
         height: size,
         background: color,
         borderRadius: shape === 'circle' ? '50%' : 0,
-        boxShadow: '0 0 0 1px #000, 0 0 0 2px #505050',
+        boxShadow: SWATCH_RING,
         padding: 0,
         border: 'none',
         ...style,

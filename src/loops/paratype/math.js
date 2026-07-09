@@ -3,8 +3,8 @@
  * RNG used only by the page-level FX pipeline stayed behind). Pure,
  * framework-free. */
 
-export const lerp = (a, b, t) => a + (b - a) * t
-export const TAU = Math.PI * 2
+import { lerp, TAU } from '../lib/util.js'
+export { lerp, TAU }
 
 /* Cardinal / Catmull-Rom spline through a list of 2D points. Returns an SVG
  * path string. `tension` in [0,1]; 0 = uniform Catmull-Rom. Open polyline. */

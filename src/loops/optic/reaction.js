@@ -8,10 +8,14 @@
 // not a function of u. draw() keeps a module-level sim (keyed by the seed
 // pattern) and advances it a fixed `iters` steps per call regardless of u,
 // exactly like the labs original free-ran while playing. Scrubbing/looping u
-// therefore doesn't rewind the growth; changing the Seed param reseeds it
-// (deterministically — scatter uses a fixed-seed PRNG). The image-dither mode
+// therefore doesn't rewind the growth; changing the Seed param, rolling the
+// Scatter-seed knob, or a transport stop/rewind (reset-epoch bump) reseeds it
+// (deterministically — scatter uses a PRNG seeded by scatterSeed). The image-dither mode
 // (per-cell feed/kill from photo luma) stayed behind in labs; a loop has no
 // media input.
+
+import { mulberry32 } from '../gl/rng.js'
+import { transport } from '../../editor/params/transport.js'
 
 const DU = 0.16
 const DV = 0.08
@@ -44,15 +48,8 @@ const rgbStops = (hexes) => hexes.map((h) => {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 })
 
-// Deterministic PRNG for the scatter seed — same layout every reseed.
-function mulberry32(a) {
-  return function () {
-    a |= 0; a = (a + 0x6D2B79F5) | 0
-    let t = Math.imul(a ^ (a >>> 15), 1 | a)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
+// Deterministic PRNG for the scatter seed (mulberry32, gl/rng.js) — same
+// layout every reseed.
 
 export class GrayScott {
   constructor(n = 170) {
@@ -170,8 +167,10 @@ export class GrayScott {
 }
 
 // Module-level free-running sim + its square pixel buffer (one loop renders at a
-// time, same sharing rule as the field rasterizer). Keyed by the seed pattern —
-// changing Seed reseeds; feed/kill/du/dv/gain morph the running sim live, exactly
+// time, same sharing rule as the field rasterizer). Keyed by the seed pattern +
+// the scatter-seed roll + the transport's reset epoch — changing Seed/rolling
+// Scatter seed reseeds, and stop/rewind (epoch bump) restarts the growth from
+// its seed layout; feed/kill/du/dv/gain morph the running sim live, exactly
 // like the labs rail sliders did.
 let sim = null
 let simKey = ''
@@ -186,6 +185,9 @@ export default {
   params: [
     { key: 'palette', label: 'Palette', type: 'select', options: RD_PALETTES.map(({ value, label }) => ({ value, label })), default: 'lava' },
     { key: 'seed', label: 'Seed', type: 'select', options: RD_SEEDS, default: 'scatter' },
+    /* Rollable (no noRandom): each roll = a NEW deterministic scatter layout —
+     * the PRNG was pinned to 0xC0FFEE before this knob existed. */
+    { key: 'scatterSeed', label: 'Scatter seed', type: 'range', min: 1, max: 99, step: 1, default: 1, when: (l) => (l.seed ?? 'scatter') === 'scatter' },
     { key: 'feed', label: 'Feed', type: 'range', min: 0.01, max: 0.08, step: 0.0005, default: 0.0367, noRandom: true },
     { key: 'kill', label: 'Kill', type: 'range', min: 0.04, max: 0.075, step: 0.0005, default: 0.0649, noRandom: true },
     { key: 'du', label: 'Diffuse U', type: 'range', min: 0.05, max: 0.3, step: 0.005, default: 0.16, noRandom: true },
@@ -194,11 +196,11 @@ export default {
     { key: 'gain', label: 'Contrast', type: 'range', min: 1, max: 6, step: 0.1, default: 3.2 },
   ],
   draw(ctx, u, w, h, p) {
-    const key = String(p.seed)
+    const key = `${p.seed}|${p.scatterSeed ?? 1}|${transport.getEpoch()}`
     if (!sim || simKey !== key) {
       sim = new GrayScott(GRID_N)
       sim.setParams({ seed: p.seed })
-      sim.reseed(mulberry32(0xC0FFEE))
+      sim.reseed(mulberry32((p.scatterSeed ?? 1) >>> 0))
       simKey = key
       if (!buf) buf = document.createElement('canvas')
     }

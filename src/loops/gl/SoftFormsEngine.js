@@ -170,7 +170,8 @@ export class SoftFormsEngine {
       uHueOff: { value: new Array(MAX_FORMS).fill(0) },
     }
     this.mat = new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, uniforms: this.uniforms })
-    this.scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat))
+    this.geo = new THREE.PlaneGeometry(2, 2)
+    this.scene.add(new THREE.Mesh(this.geo, this.mat))
   }
 
   resize(w, h) {
@@ -200,10 +201,13 @@ export class SoftFormsEngine {
     const u = this.uniforms
     const num = {
       hue: 'uHue', irid: 'uIrid', sheen: 'uSheen', gloss: 'uGloss', rim: 'uRim',
-      rimPow: 'uRimPow', rimShift: 'uRimShift', sss: 'uSSS', bulge: 'uBulge',
+      rimPow: 'uRimPow', rimShift: 'uRimShift', sss: 'uSSS',
       relief: 'uRelief', motion: 'uMotion', grain: 'uGrain', edge: 'uEdge',
     }
     for (const k in num) if (p[k] != null) u[num[k]].value = p[k]
+    /* bulge is off-schema (only sf-lava sets it) — map missing → uniform
+     * default so a preset switch on the live engine can't inherit it. */
+    u.uBulge.value = p.bulge ?? 0.55
     if (p.spectral != null) u.uSpectral.value = p.spectral ? 1 : 0
     if (p.sweep != null) {
       const a = (p.sweep * Math.PI) / 180
@@ -243,6 +247,8 @@ export class SoftFormsEngine {
   }
 
   destroy() {
+    this.mat?.dispose()
+    this.geo?.dispose()
     if (this.renderer) { this.renderer.dispose(); this.renderer = null }
   }
 }

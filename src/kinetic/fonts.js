@@ -14,6 +14,7 @@ export const FONTS = [
 ]
 
 export const FONT_OPTIONS = FONTS.map((f) => ({ value: f.key, label: f.label }))
+export const AXIS_LABELS = { wght: 'Weight', wdth: 'Width', ital: 'Italic', slnt: 'Slant', opsz: 'Optical size' }
 export const fontByKey = (k) => FONTS.find((f) => f.key === k) || FONTS[0]
 
 // Default vf object for a font (each present axis at its default value).

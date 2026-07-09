@@ -149,18 +149,21 @@ export default function CropOverlay({
         zIndex: 110,
       }}
     >
-      {/* full-extent ghost — what lies outside the crop */}
-      <img
-        src={layer.src} alt="" draggable={false}
-        style={{
+      {/* full-extent ghost — what lies outside the crop. Video sources use a
+          muted <video> (an <img src=blob:video> renders blank). */}
+      {(() => {
+        const ghostStyle = {
           position: 'absolute',
           left: layer.imgX, top: layer.imgY,
           width: layer.imgW, height: layer.imgH,
           maxWidth: 'none',
           opacity: 0.35,
           pointerEvents: 'none',
-        }}
-      />
+        }
+        return layer.srcType === 'video'
+          ? <video src={layer.src} muted playsInline draggable={false} style={ghostStyle} />
+          : <img src={layer.src} alt="" draggable={false} style={ghostStyle} />
+      })()}
       {/* frame outline + pan surface */}
       <div
         onMouseDown={startDrag('pan')}

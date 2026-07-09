@@ -11,6 +11,10 @@ import { CanvasZoomContext } from '../shell/Canvas'
  */
 const HANDLE_SIZE = 10  /* virtual px */
 
+/* Dimension-label backdrop — dark scrim over arbitrary canvas content (kol-theme
+ * ships no scrim token yet). */
+const LABEL_SCRIM = 'rgba(0,0,0,0.6)'
+
 const HANDLE_DIRS = [
   { dir: 'NW', cursor: 'nwse-resize', x: 0,    y: 0    },
   { dir: 'N',  cursor: 'ns-resize',   x: 0.5,  y: 0    },
@@ -107,7 +111,7 @@ export default function SelectionOverlay({ layer, showHandles = true, showLabel 
             fontSize: 10,
             letterSpacing: '0.04em',
             color: 'var(--kol-accent-primary)',
-            background: 'rgba(0,0,0,0.6)',
+            background: LABEL_SCRIM,
             padding: '2px 6px',
             borderRadius: 2,
             whiteSpace: 'nowrap',

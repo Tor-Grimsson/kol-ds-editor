@@ -4,10 +4,10 @@ import ColorPicker from '../../modes/pattern/ColorPicker'
 import RuleRow, { newRule, randomRule } from '../../modes/pattern/RuleRow'
 import AutoControls from '../../params/AutoControls'
 import BindDot from '../../params/BindDot'
+import { allScopeParams, computeRoll, useRollSeed, SeedField } from '../../params/rolls'
 import { PATTERN_SCHEMA } from '../../params/schemas/pattern'
 import { useComposeState, resolveColor, patternFromSpec } from '../state'
 import { findLayerDeep } from '../helpers'
-import { labelForLayer } from '../labels'
 import { useLayerEdit } from '../useLayerEdit'
 import { useGeneratorLibrary } from '../../library/LibraryProvider'
 
@@ -51,11 +51,7 @@ export default function PatternPanel() {
 
   return (
     <div className="kol-compose-rail kol-compose-rail--inspector">
-      {/* min-h matches InspectorRail's header so tab switches never shift
-          the column. */}
-      <div className="flex items-center gap-3 px-4 min-h-[46px]">
-        {pattern && <span className="kol-helper-12 text-emphasis">{labelForLayer(pattern)}</span>}
-      </div>
+      {/* Header (title + delete) is shared in SelectionPalettePanel. */}
       <div className="kol-compose-inspector-body">
         {pattern
           ? <PatternSurface key={pattern.id} layer={pattern} />
@@ -130,8 +126,21 @@ function PatternSurface({ layer }) {
     })
   }
 
+  /* Seeded Randomize-all over the schema params only (shared rng lib —
+   * randomizeSchema + mergeRoll, seed persisted as `_rollSeed`). The rules
+   * stack stays with its own Randomize below — the seeded rules roll is a
+   * later wave. */
+  const seed = useRollSeed(layer)
+  const onRollAll = () =>
+    updateLayer(layer.id, computeRoll(layer, allScopeParams(PATTERN_TAB_SCHEMA, layer), seed.take()))
+
   return (
     <div className="flex flex-col gap-4">
+      <EditorButton variant="primary" size="sm" className="w-full" onClick={onRollAll}>
+        Randomize all
+      </EditorButton>
+      <SeedField seed={seed} />
+
       <AutoControls
         schema={PATTERN_TAB_SCHEMA}
         layer={layer}

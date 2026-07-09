@@ -27,6 +27,16 @@ export const mediaUrl = (key) => `${PUBLIC_BASE}/${key}`
 export const isImageType = (ct) => !!ct && ct.startsWith('image/')
 export const isVideoType = (ct) => !!ct && ct.startsWith('video/')
 
+/* Human-readable byte size (labs mediaLibrary parity) — used by the picker's
+ * lightbox to show a file's weight. */
+export function formatSize(bytes) {
+  if (bytes == null) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
 /* Rewrite a public CDN URL to the same-origin proxy path. Non-CDN
  * URLs (data:, blob:, already-proxied) pass through untouched. */
 export const proxied = (url) => url.replace(/^https:\/\/media\.kolkrabbi\.io\//, PROXY_BASE)

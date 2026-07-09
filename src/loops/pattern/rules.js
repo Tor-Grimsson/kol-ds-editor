@@ -25,7 +25,7 @@ const RANDOM_KINDS = ['every-col', 'every-row', 'both', 'every-nth', 'checker']
 const RANDOM_ROTATES = [0, 90, 180, 270]
 let nextRuleId = 1
 const ruleId = () => `r${nextRuleId++}`
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)]
+const pick = (arr, rnd = Math.random) => arr[Math.floor(rnd() * arr.length)]
 
 export const newRule = () => ({
   id: ruleId(),
@@ -36,21 +36,23 @@ export const newRule = () => ({
   rotate: 90, flipH: false, flipV: false, hide: false, opacity: 1,
 })
 
-export const randomRule = () => ({
+/* `rnd` (optional 0..1 fn) lets seeded surfaces (RulesEditor via mulberry32)
+ * reproduce a roll; bare calls keep the labs Math.random behaviour. */
+export const randomRule = (rnd = Math.random) => ({
   id: ruleId(),
-  selectKind: pick(RANDOM_KINDS),
-  n: Math.floor(Math.random() * 5) + 2,
-  offset: Math.floor(Math.random() * 3),
-  n2: Math.floor(Math.random() * 5) + 2,
-  offset2: Math.floor(Math.random() * 3),
+  selectKind: pick(RANDOM_KINDS, rnd),
+  n: Math.floor(rnd() * 5) + 2,
+  offset: Math.floor(rnd() * 3),
+  n2: Math.floor(rnd() * 5) + 2,
+  offset2: Math.floor(rnd() * 3),
   expression: 'sin(col * 0.6) + cos(row * 0.6)',
-  groupW: Math.random() > 0.6 ? Math.floor(Math.random() * 3) + 1 : 1,
-  groupH: Math.random() > 0.6 ? Math.floor(Math.random() * 3) + 1 : 1,
-  rotate: pick(RANDOM_ROTATES),
-  flipH: Math.random() > 0.6,
-  flipV: Math.random() > 0.6,
-  hide: Math.random() > 0.85,
-  opacity: Math.random() > 0.7 ? 0.4 + Math.random() * 0.6 : 1,
+  groupW: rnd() > 0.6 ? Math.floor(rnd() * 3) + 1 : 1,
+  groupH: rnd() > 0.6 ? Math.floor(rnd() * 3) + 1 : 1,
+  rotate: pick(RANDOM_ROTATES, rnd),
+  flipH: rnd() > 0.6,
+  flipV: rnd() > 0.6,
+  hide: rnd() > 0.85,
+  opacity: rnd() > 0.7 ? 0.4 + rnd() * 0.6 : 1,
 })
 
 export function compileExpression(expr) {

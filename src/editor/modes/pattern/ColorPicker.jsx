@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import EditorButton from '../../components/EditorButton'
 import { ColorSwatch } from '@kolkrabbi/kol-component'
 import { ViewToggle } from '@kolkrabbi/kol-component'
-import { resolveCssVar } from '../../../components/sections/ColorRamp'
+import { resolveCssVar } from '../../color/cssVar'
 import { ColorField } from '../../compose/inspectors/LayerInspector'
 import { resolveColor, useComposeState } from '../../compose/state'
 

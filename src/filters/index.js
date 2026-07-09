@@ -33,6 +33,7 @@ import halftoneDither from './fxHalftoneDither.js'
 import bitmap from './fxBitmap.js'
 import { EFFECTS_FX } from './fxEffects.js'
 import { GL_FILTERS } from './gl/catalog.js'
+import { PIXI_FILTERS } from './pixi/defs.js'
 
 export const FILTERS = [
   glass, scanline, dither,
@@ -45,6 +46,10 @@ export const FILTERS = [
   ...EFFECTS_FX,
   /* GL engine filters — synths / distortion / lens (labs radar); lazy engines */
   ...GL_FILTERS,
+  /* Pixi GPU tier (kind:'pixi') — labs pages/effects engine (35 pixi-filters).
+     Data-only defs; adapter/pipeline load lazily via dynamic import. Batch
+     between the canvas chain and any terminal GL engine (see filterChain.js). */
+  ...PIXI_FILTERS,
 ]
 
 export const filterById = (id) => FILTERS.find((f) => f.id === id) ?? null

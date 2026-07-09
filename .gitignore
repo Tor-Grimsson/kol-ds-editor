@@ -12,3 +12,9 @@ dist-ssr
 LLM_RULES.md
 /docs/
 .claude/
+
+# Obsidian vault runtime state
+docs/.obsidian/
+
+# Agent boot symlink (scaffold-llm-context)
+LLM_RULES.md

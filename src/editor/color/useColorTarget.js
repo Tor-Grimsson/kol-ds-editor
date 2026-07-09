@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useComposeState, resolveColor, COLOR_LAYER_TYPES } from '../compose/state'
 import { findLayerDeep } from '../compose/helpers'
 
@@ -48,28 +48,31 @@ export function useColorTarget({ history = 'discrete', coalesceMs = 250 } = {}) 
   /* Coalesce: open one transaction on first write, commit after `coalesceMs`
    * of quiet. Slider drags + SB-square drags collapse to one undo entry. */
   const timerRef = useRef(null)
-  const flush = () => {
+  const flush = useCallback(() => {
     if (timerRef.current === null) return
     clearTimeout(timerRef.current)
     timerRef.current = null
     commitTransaction()
-  }
-  const schedule = () => {
+  }, [commitTransaction])
+  const schedule = useCallback(() => {
     if (timerRef.current === null) beginTransaction()
     if (timerRef.current !== null) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
       commitTransaction()
     }, coalesceMs)
-  }
-  useEffect(() => () => flush(), [])
-  const wrap = (fn) => history === 'coalesce'
-    ? (v) => { schedule(); fn(v) }
-    : fn
+  }, [beginTransaction, commitTransaction, coalesceMs])
+  useEffect(() => () => flush(), [flush])
+  const coalesce = history === 'coalesce'
 
   const isCanvas = selectedId === 'canvas'
   const layer    = !isCanvas && selectedId ? findLayerDeep(layers, selectedId) : null
   const isColorLayer = !!layer && COLOR_LAYER_TYPES.has(layer.type)
+  /* Narrow, identity-stable derivations — the callbacks/memo below key on
+   * these instead of the layer OBJECT, whose identity churns on every layer
+   * patch (60×/s during drags) and would rebuild the return each render. */
+  const layerType    = layer?.type ?? ''
+  const colorLayerId = isColorLayer ? layer.id : null
 
   /* Reads: always from app-level state. Resolved hex passes through
    * `resolveColor` so palette refs (set on the layer) display correctly
@@ -80,30 +83,32 @@ export function useColorTarget({ history = 'discrete', coalesceMs = 250 } = {}) 
   const strokeHex = resolveColor(strokeRaw, palette)
 
   /* Writes: app-level always; selection (layer or canvas) when applicable. */
-  const setFillRaw = (v) => {
+  const setFill = useCallback((v) => {
+    if (coalesce) schedule()
     setPaintFill(v)
-    if (isCanvas)        setCanvasFill(v)
-    else if (isColorLayer) updateLayer(layer.id, { color: v })
-  }
-  const setStrokeRaw = (v) => {
+    if (isCanvas)          setCanvasFill(v)
+    else if (colorLayerId) updateLayer(colorLayerId, { color: v })
+  }, [coalesce, schedule, setPaintFill, isCanvas, setCanvasFill, colorLayerId, updateLayer])
+  const setStroke = useCallback((v) => {
+    if (coalesce) schedule()
     setPaintStroke(v)
-    if (isColorLayer)    updateLayer(layer.id, { stroke: v })
+    if (colorLayerId) updateLayer(colorLayerId, { stroke: v })
     /* canvas has no stroke; skipped */
-  }
-  const setFill   = wrap(setFillRaw)
-  const setStroke = wrap(setStrokeRaw)
+  }, [coalesce, schedule, setPaintStroke, colorLayerId, updateLayer])
 
   const effective = activePaint === 'stroke' ? 'stroke' : 'fill'
 
-  const swap = () => {
+  const swap = useCallback(() => {
     setActivePaint(effective === 'fill' ? 'stroke' : 'fill')
-  }
+  }, [setActivePaint, effective])
 
-  return {
+  /* Memoized so consumers can put the hook's return in effect deps (e.g.
+   * CanvasArea's window keydown keymap) without rebinding every render. */
+  return useMemo(() => ({
     activePaint:    effective,
     setActivePaint,
     swap,
-    label:          isCanvas ? 'Canvas' : layer?.type ?? '',
+    label:          isCanvas ? 'Canvas' : layerType,
 
     /* active paint — what hue / D / N / inspector default writes target */
     hex:      (effective === 'stroke' ? strokeHex : fillHex) ?? '#000000',
@@ -115,5 +120,5 @@ export function useColorTarget({ history = 'discrete', coalesceMs = 250 } = {}) 
     strokeHex: strokeHex ?? null,
     fillRaw, strokeRaw,
     setFill, setStroke,
-  }
+  }), [effective, setActivePaint, swap, isCanvas, layerType, fillHex, strokeHex, fillRaw, strokeRaw, setFill, setStroke])
 }

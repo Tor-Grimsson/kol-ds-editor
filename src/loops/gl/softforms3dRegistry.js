@@ -75,8 +75,9 @@ export const SCENES_3D = [
 
   { id: 'eclipse3', cat: 'meta', label: 'Eclipse',
     // Dark palette, large+small; the small one rolls around the large one
-    // and periodically merges at the equator.
-    defaults: { palette: 'noir', spectral: true, irid: 0.6, motion: 0.65,
+    // and periodically merges at the equator. ('noir' is a LOOK id, not a
+    // GRAD_PALETTE — its recipe is palette 'spectrum' + low irid/high rim.)
+    defaults: { palette: 'spectrum', spectral: true, irid: 0.6, motion: 0.65,
                 sweep: 52, rim: 1.3, sss: 0.35, sheen: 0.3, metaball: true },
     forms: [
       { t: 'sphere', x: -0.2,  y:  0.05, z: 0,   sx: 0.92, sy: 0.92, sz: 0.92, rot: 0, hue: 0.0  },
@@ -92,26 +93,3 @@ export const DEFAULT_SCENE_3D = 'binary'
 export const catRoute = (id) => (id === CATEGORIES_3D[0].id ? '/softforms-3d' : `/softforms-3d/${id}`)
 export const categoryById = (id) => CATEGORIES_3D.find((c) => c.id === id) || CATEGORIES_3D[0]
 export const presetsForCat = (cat) => SCENES_3D.filter((s) => s.cat === cat)
-
-export const BASE_PARAMS_3D = {
-  hue: 0, irid: 1.0, sweep: 22, sheen: 0.4, gloss: 34,
-  rim: 0.8, rimPow: 2.6, rimShift: 0.12, sss: 0.3,
-  motion: 0.0, grain: 0.018, spectral: true,
-  palette: 'spectrum', backdrop: 'black', metaball: false,
-  frameMode: 'static', frameSpeed: 0.3, // Frame motion (auto-orbit), editor-side
-}
-
-export const NUMERIC_KEYS_3D = ['hue', 'irid', 'sweep', 'sheen', 'gloss', 'rim', 'rimPow', 'sss', 'motion', 'grain']
-
-export const CTRL_SPEC_3D = {
-  sweep:  { label: 'Sweep',      min: 0,    max: 360,  step: 1    },
-  irid:   { label: 'Iridescence',min: 0,    max: 2.5,  step: 0.05 },
-  hue:    { label: 'Hue',        min: 0,    max: 1,    step: 0.01 },
-  sheen:  { label: 'Sheen',      min: 0,    max: 1.5,  step: 0.02 },
-  gloss:  { label: 'Gloss',      min: 4,    max: 90,   step: 1    },
-  rim:    { label: 'Rim',        min: 0,    max: 2,    step: 0.05 },
-  rimPow: { label: 'Rim focus',  min: 1,    max: 6,    step: 0.1  },
-  sss:    { label: 'Subsurface', min: 0,    max: 1,    step: 0.02 },
-  motion: { label: 'Motion',     min: 0,    max: 1.5,  step: 0.05 },
-  grain:  { label: 'Grain',      min: 0,    max: 0.12, step: 0.005},
-}

@@ -16,6 +16,7 @@
  * `i,col,row,cols,rows` in scope and `Math.*` (sin/cos/abs/floor/PI) available.
  */
 
+
 const DEFAULT_VIEW_BOX = '0 0 24 24'
 
 function parseShape(svg) {
@@ -150,16 +151,4 @@ ${body}
 </defs>
 ${uses.join('\n')}
 </svg>`
-}
-
-export function downloadSvg(svgString, filename = 'pattern.svg') {
-  const blob = new Blob([svgString], { type: 'image/svg+xml' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
 }

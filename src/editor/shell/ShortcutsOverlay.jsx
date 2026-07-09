@@ -13,6 +13,10 @@ import EditorButton from '../components/EditorButton'
  * key handler — anything that wants to summon the overlay just dispatches
  * the event.
  */
+
+/* Modal backdrop — dark in both themes (kol-theme ships no scrim token yet). */
+const SCRIM = 'rgba(0, 0, 0, 0.6)'
+
 export default function ShortcutsOverlay() {
   const [open, setOpen] = useState(false)
 
@@ -41,7 +45,7 @@ export default function ShortcutsOverlay() {
   return (
     <div
       className="fixed inset-0 z-[1000] flex items-center justify-center"
-      style={{ background: 'rgba(0, 0, 0, 0.6)' }}
+      style={{ background: SCRIM }}
       onClick={() => setOpen(false)}
     >
       <div

@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import { Slider, Dropdown, Input, LabeledControl } from '@kolkrabbi/kol-component'
+import { Slider, Dropdown, LabeledControl, ToggleSwitch } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../state'
 import { ASPECTS } from '../../shell/aspects'
 import { ColorField } from './LayerInspector'
+import { NumberField } from './NumberField'
 
 /**
  * CanvasInspector — properties for the canvas/frame "layer".
@@ -52,22 +52,7 @@ export default function CanvasInspector() {
         </div>
       </LabeledControl>
 
-      <LabeledControl label="Grid">
-        <button
-          type="button"
-          onClick={toggleGrid}
-          aria-pressed={showGrid}
-          className="inline-flex items-center gap-2 kol-helper-12 rounded px-2 h-7"
-          style={{
-            border: '1px solid var(--kol-fg-08)',
-            background: 'transparent',
-            cursor: 'pointer',
-            color: showGrid ? 'var(--kol-accent-primary)' : 'var(--kol-fg-48)',
-          }}
-        >
-          {showGrid ? 'Visible' : 'Hidden'}
-        </button>
-      </LabeledControl>
+      <ToggleSwitch variant="plain" label="Grid" checked={showGrid} onChange={toggleGrid} />
 
       <ColorField
         label="Background"
@@ -96,14 +81,10 @@ export default function CanvasInspector() {
   )
 }
 
-/* Number field that commits on blur / Enter (not per-keystroke) so typing
- * "1920" doesn't reshape the canvas at "1", "19", "192". */
-/* Controlled draft, committed on blur/Enter. (The old defaultValue+key trick
- * fought the DS Input, which always sets `value` internally — React logged
- * controlled/uncontrolled warnings on every render.) */
+/* Dimension field — the shared NumberField draft/commit core (typing "1920"
+ * doesn't reshape the canvas at "1", "19", "192") with the W/H letter
+ * outside the input; ghost/flex-1 so the input fills the row. */
 function SizeField({ label, value, onCommit, num }) {
-  const [draft, setDraft] = useState(String(value))
-  useEffect(() => { setDraft(String(value)) }, [value])
   return (
     <div className="flex items-center gap-1.5 flex-1 min-w-0">
       <span
@@ -113,14 +94,11 @@ function SizeField({ label, value, onCommit, num }) {
         {label}
       </span>
       <div className="flex-1 min-w-0">
-        <Input
+        <NumberField
           variant="ghost"
           size="sm"
-          type="number"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => onCommit(num(draft, value))}
-          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+          value={value}
+          onCommit={(raw) => onCommit(num(raw, value))}
         />
       </div>
     </div>

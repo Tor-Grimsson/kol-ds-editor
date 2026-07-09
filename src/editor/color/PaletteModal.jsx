@@ -129,7 +129,7 @@ function PaletteModalBody({ onClose, layoutId, setLayoutId, harmonyId, setHarmon
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
+      className="kol-design-editor fixed inset-0 z-[1000] flex items-center justify-center bg-black/50"
       onMouseDown={onClose}
     >
       <div

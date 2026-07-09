@@ -15,8 +15,9 @@
  * where Amount < 100 — at 100 the cells are pure photo luma.
  */
 
-const TAU = Math.PI * 2
-const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v)
+import { TAU, clamp01 } from '../loops/lib/util.js'
+import { sinHash2 as hash2, registerSourceCache } from './fxCore.js'
+import { NO_SWEEP, sweepStates, evalSweeps, anyReveal } from './sweeps.js'
 
 const FIELD_OPTIONS = [
   { value: 'radial', label: 'Radial' },
@@ -41,10 +42,6 @@ const PALETTES = [
   { value: 'mono', label: 'Mono', stops: ['#000000', '#ffffff'] },
 ]
 
-function hash2(x, y) {
-  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
-  return s - Math.floor(s)
-}
 function vnoise(x, y) {
   const xi = Math.floor(x), yi = Math.floor(y)
   const xf = x - xi, yf = y - yi
@@ -139,6 +136,7 @@ function cellsFor(layout, density, w, h) {
  * the fitted canvas the host hands us; the scratch canvas is reused. */
 const LUMA_N = 256
 const lumaCache = new WeakMap()
+registerSourceCache(lumaCache)   /* chain intermediates / loop sources invalidate in place */
 let lumaScratch = null
 function lumaFor(src) {
   let e = lumaCache.get(src)
@@ -164,14 +162,17 @@ export default {
   id: 'fx-bitmap',
   label: 'Bitmap',
   animated: true,
+  sweeps: true,   /* stacked sweep rig (sweeps.js) — third cell-grid filter, same wiring as the trio */
   params: [
-    { key: 'amount', label: 'Amount', type: 'range', min: 0, max: 100, step: 1, default: 100, section: 'Effect' },
+    /* noRandom: Amount is the photo/field blend dial — not a look param. */
+    { key: 'amount', label: 'Amount', type: 'range', min: 0, max: 100, step: 1, default: 100, noRandom: true, section: 'Effect' },
     { key: 'field', label: 'Field', type: 'select', options: FIELD_OPTIONS, default: 'radial', section: 'Field' },
     { key: 'fieldScale', label: 'Field scale', type: 'range', min: 0.2, max: 4, step: 0.05, default: 1, section: 'Field', when: (l) => (l.field ?? 'radial') !== 'radial' },
     { key: 'contrast', label: 'Contrast', type: 'range', min: 0.3, max: 4, step: 0.05, default: 1, section: 'Field' },
     { key: 'rotate', label: 'Rotate', type: 'range', min: 0, max: 360, step: 1, default: 0, section: 'Field' },
     { key: 'layout', label: 'Layout', type: 'segmented', options: LAYOUT_OPTIONS, default: 'hex', section: 'Grid' },
-    { key: 'density', label: 'Density', type: 'range', min: 4, max: 80, step: 1, default: 34, section: 'Grid' },
+    /* noRandom: density is grid resolution — a size thing, not a look. */
+    { key: 'density', label: 'Density', type: 'range', min: 4, max: 80, step: 1, default: 34, noRandom: true, section: 'Grid' },
     { key: 'shape', label: 'Cell shape', type: 'segmented', options: SHAPE_OPTIONS, default: 'dot', section: 'Cell' },
     { key: 'dotScale', label: 'Dot scale', type: 'range', min: 0.2, max: 2, step: 0.05, default: 1, section: 'Cell' },
     { key: 'invert', label: 'Invert', type: 'toggle', default: false, section: 'Cell' },
@@ -194,8 +195,13 @@ export default {
     const ph = TAU * u * Math.round(p.flow ?? 1)
     const rotate = (((p.rotate ?? 0) + 360 * u * Math.round(p.spin ?? 0)) * Math.PI) / 180
 
+    const st = sweepStates(p, u)
+    const reveal = anyReveal(st)
+
     ctx.fillStyle = p.bg ?? '#06070b'
     ctx.fillRect(0, 0, w, h)
+    // Reveal sweeps wipe the cells in/out over the raw photo underneath.
+    if (reveal) ctx.drawImage(src, 0, 0, w, h)
 
     const pal = rgbStops((PALETTES.find((q) => q.value === p.palette) || PALETTES[0]).stops)
     const freq = (1 + density * 0.15) * (p.fieldScale ?? 1)
@@ -205,6 +211,8 @@ export default {
 
     for (let k = 0; k < list.length; k++) {
       const nx = list[k][0], ny = list[k][1]
+      const pkt = st ? evalSweeps(st, nx, ny) : NO_SWEEP
+      if (pkt.hasReveal && pkt.reveal < 0.5) continue // photo underlay shows through
       // rotate the sample point around the centre so the field spins under the grid
       const rx = (nx - 0.5) * cosR - (ny - 0.5) * sinR + 0.5
       const ry = (nx - 0.5) * sinR + (ny - 0.5) * cosR + 0.5
@@ -215,11 +223,12 @@ export default {
         const lv = luma[py * LUMA_N + px]
         v = blend >= 1 ? lv : v + (lv - v) * blend
       }
+      if (pkt.bright) v = clamp01(v + pkt.bright)
       if (contrast !== 1) v = clamp01(Math.pow(v, contrast))
       if (invert) v = 1 - v
-      const size = v * cellPx * 0.62 * dotScale
+      const size = v * cellPx * 0.62 * dotScale * pkt.scaleMul
       if (size < 0.4) continue
-      const x = nx * w, y = ny * h
+      const x = nx * w + pkt.offX * cellPx, y = ny * h + pkt.offY * cellPx
       ctx.fillStyle = paletteColor(pal, v)
       if (shape === 'square') {
         ctx.fillRect(x - size, y - size, size * 2, size * 2)

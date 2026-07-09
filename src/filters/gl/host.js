@@ -61,12 +61,15 @@ export function applyParams(def, engine, params) {
   engine.setParams(params)
 }
 
-export function driveEngine(def, engine, { dt }) {
-  engine.frame(dt)
+export function driveEngine(def, engine, { dt, u }) {
+  /* Forward transport phase `u` so phase-driven engine features (distort
+   * cursor-path replay) sync to the loop; free-running engines ignore it. */
+  engine.frame(dt, u)
 }
 
 export function destroyEngine(engine) {
   if (!engine) return
+  const renderer = engine.renderer   /* some engines null this in teardown — capture first */
   /* Teardown runs inside React's unmount cleanup — a throw here would kill
    * the whole tree (the blank-screen-on-delete bug). Engines are being
    * discarded anyway; log and move on. */
@@ -76,4 +79,7 @@ export function destroyEngine(engine) {
   } catch (err) {
     console.warn('[gl] engine dispose failed (ignored):', err?.message ?? err)
   }
+  /* Release the WebGL context NOW instead of at GC — Chrome caps live
+   * contexts (~16) and force-loses the oldest, which can blank a LIVE layer. */
+  try { renderer?.forceContextLoss?.() } catch { /* context already lost */ }
 }

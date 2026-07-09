@@ -23,6 +23,7 @@ const INSTANCE_DEFAULTS = {
   letterSpacing: 0,
   align: 'center',
   multiply: 1,              // render N copies of the word in one instance
+  group: null,              // shared group tag — grouped elements move/scale/style as one (old comps: undefined ≡ ungrouped)
   flow: 'flow',             // 'flow' = type ignores the frame edges · 'contain' = kept inside
   offset: { x: 0, y: 0 },   // normalized position offset from frame centre
   phase: 0,                 // per-instance time shift (u offset 0..1) — editor extension

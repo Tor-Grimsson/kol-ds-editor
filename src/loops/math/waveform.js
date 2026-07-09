@@ -4,9 +4,12 @@
 // periodic wave whose value scrolls right as the trace.
 //
 // PURE IN u. What changed vs labs:
-//   • compileVars expression evaluation did NOT come along (same call as the
-//     surface port) — the wave f(t) is a select over the labs FUNC_EXAMPLES,
-//     frozen to plain JS. Harmonics/rolloff still shape the DFT.
+//   • The wave f(t) is a select over the labs FUNC_EXAMPLES frozen to plain
+//     JS PLUS 'Custom…' — a free-text f(t) compiled by ./mathfn.js (hardened
+//     compileVars) and fed through the same DFT (termsFromFn samples one
+//     period 0..2π, so any f(t) drops in). While a custom string doesn't
+//     compile the slot keeps the last good fn. Harmonics/rolloff still shape
+//     the DFT.
 //   • The labs trace was ACCUMULATED (one tip sample unshifted per rAF frame).
 //     Here it is closed-form: the sample at column i is the tip Y re-evaluated
 //     at the past phase u − i/(60·duration) — identical geometry at 60fps, but
@@ -16,11 +19,14 @@
 //     (pulse/swing/stagger/fade) run whole cycles; Frame flow pans whole frame
 //     sizes per loop (integer flow × PAN_VEC ⇒ toroidal wrap lands exactly).
 
+import { compileSlot } from './mathfn.js'
+import { drawAxes2D, AXIS_2D_OPTIONS } from './axes.js'
+
 const TAU = Math.PI * 2
 const DURATION = 10 // seconds per loop — also the cycle-snap denominator
 const PX_RATE = 60 // trace samples (columns) per second — labs sampled per rAF frame
 
-// ── Frozen wave functions (labs FUNC_EXAMPLES, compileVars dropped).
+// ── Frozen wave functions (labs FUNC_EXAMPLES).
 export const WAVE_OPTIONS = [
   { value: 'square', label: 'Square', fn: (t) => Math.sign(Math.sin(t)) },
   { value: 'sawtooth', label: 'Sawtooth', fn: (t) => ((t / Math.PI) % 2 + 2) % 2 - 1 },
@@ -28,6 +34,17 @@ export const WAVE_OPTIONS = [
   { value: 'sine', label: 'Sine', fn: (t) => Math.sin(t) },
   { value: 'organ', label: 'Organ', fn: (t) => Math.sin(t) + 0.5 * Math.sin(3 * t) + 0.25 * Math.sin(5 * t) },
   { value: 'softsq', label: 'Soft square', fn: (t) => Math.tanh(3 * Math.sin(t)) },
+]
+
+// Labs FUNC_EXAMPLES expression strings, verbatim — quick-fill list for the
+// custom f(t) (the text param carries one as its placeholder). f is sampled
+// over one period t = 0..2π.
+export const WAVE_EXPR_EXAMPLES = [
+  'sign(sin(t))',
+  'mod(t/PI, 2) - 1',
+  '2/PI*asin(sin(t))',
+  'sin(t) + 0.5*sin(3*t) + 0.25*sin(5*t)',
+  'tanh(3*sin(t))',
 ]
 
 // Numerical Fourier synthesis (verbatim from labs termsFromFn): sample f(t)
@@ -54,13 +71,18 @@ function termsFromFn(fn, n, rolloff = 0, samples = 512) {
   return terms.length ? terms : [{ k: 1, amp: 1, phase: 0 }]
 }
 
-// Pure memo — terms are a deterministic function of (wave, harmonics, rolloff).
+// Pure memo — terms are a deterministic function of (wave, harmonics,
+// rolloff) plus, for a custom wave, the expression text + layer (last-good
+// fns diverge per layer, so the cache must too).
 const TERMS = new Map()
 function getTerms(p) {
-  const key = `${p.wave}|${p.harmonics}|${p.rolloff}`
+  const custom = p.wave === 'custom'
+  const key = `${custom ? `custom:${p.id ?? ''}:${p.expr ?? ''}` : p.wave}|${p.harmonics}|${p.rolloff}`
   let t = TERMS.get(key)
   if (!t) {
-    const fn = (WAVE_OPTIONS.find((w) => w.value === p.wave) || WAVE_OPTIONS[0]).fn
+    const fn = custom
+      ? (compileSlot(`math-waveform:${p.id ?? ''}:expr`, p.expr, ['t']) || WAVE_OPTIONS[3].fn)
+      : (WAVE_OPTIONS.find((w) => w.value === p.wave) || WAVE_OPTIONS[0]).fn
     t = termsFromFn(fn, p.harmonics, p.rolloff)
     TERMS.set(key, t)
     while (TERMS.size > 12) TERMS.delete(TERMS.keys().next().value)
@@ -100,7 +122,8 @@ export default {
   params: [
     { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#0c0a06' },
     { key: 'fg', label: 'Foreground', type: 'color', role: 'fg', default: '#ffb35c' },
-    { key: 'wave', label: 'Wave', type: 'select', options: WAVE_OPTIONS.map(({ value, label }) => ({ value, label })), default: 'square' },
+    { key: 'wave', label: 'Wave', type: 'select', options: [...WAVE_OPTIONS.map(({ value, label }) => ({ value, label })), { value: 'custom', label: 'Custom…' }], default: 'square' },
+    { key: 'expr', label: 'f(t) =', type: 'text', rows: 2, default: WAVE_EXPR_EXAMPLES[3], placeholder: WAVE_EXPR_EXAMPLES[4], when: (l) => l.wave === 'custom' },
     { key: 'harmonics', label: 'Harmonics', type: 'range', min: 1, max: 24, step: 1, default: 8 },
     { key: 'rolloff', label: 'Rolloff', type: 'range', min: 0, max: 1.5, step: 0.05, default: 0 },
     { key: 'phase', label: 'Phase', type: 'range', min: 0, max: 360, step: 1, default: 0 },
@@ -128,10 +151,18 @@ export default {
     { key: 'pulse', label: 'Pulse', type: 'range', min: 0, max: 1, step: 0.05, default: 0, tab: 'anim', section: 'Form' },
     { key: 'fade', label: 'Fade', type: 'range', min: 0, max: 1, step: 0.05, default: 0, tab: 'anim', section: 'Form' },
     { key: 'swing', label: 'Swing', type: 'range', min: 0, max: 90, step: 1, default: 0, tab: 'anim', section: 'Form' },
+    // Reference axes/grid (labs StylePanel AXIS_2D; new on this loop — labs
+    // waveforms had no axis system, spec'd in with a fixed 8-unit reference
+    // frame). Static screen-space: the Frame pan/zoom moves the figure over
+    // the grid, not the grid.
+    { key: 'axes', label: 'Axes', type: 'select', options: AXIS_2D_OPTIONS, default: 'none', section: 'Reference' },
+    { key: 'gridColor', label: 'Grid color', type: 'color', role: 'fg', default: '#ffffff', section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
+    { key: 'gridOpacity', label: 'Grid opacity', type: 'range', min: 0, max: 1, step: 0.02, default: 0.12, section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
   ],
   draw(ctx, u, w, h, p) {
     ctx.fillStyle = p.bg
     ctx.fillRect(0, 0, w, h)
+    drawAxes2D(ctx, w, h, { axis: p.axes, gridColor: p.gridColor, gridOpacity: p.gridOpacity }, { cx: 0, cy: 0, range: 8 })
 
     const terms = getTerms(p)
     const fg = p.fg || '#e5dfcf'

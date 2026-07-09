@@ -1,9 +1,9 @@
-import { Input } from '@kolkrabbi/kol-component'
 import { LabeledControl } from '@kolkrabbi/kol-component'
 import { SegmentedToggle } from '@kolkrabbi/kol-component'
 import { useComposeState } from '../compose/state'
 import { findLayerDeep } from '../compose/helpers'
 import { useLayerEdit } from '../compose/useLayerEdit'
+import { NumberField } from '../compose/inspectors/NumberField'
 
 /**
  * StrokePanel — weight + style controls for the selected layer's stroke.
@@ -99,13 +99,13 @@ export function StrokeBody() {
   return (
     <div className="p-4 flex flex-col gap-4">
       <LabeledControl inline label="Weight">
-        <Input
+        <NumberField
           variant="filled"
           size="sm"
           suffix="pt"
           chars={4}
           value={weight}
-          onChange={(e) => onWeight(e.target.value)}
+          onCommit={onWeight}
         />
       </LabeledControl>
       <LabeledControl inline label="Style"><SegmentedToggle size="sm" value={style} onChange={onStyle} options={STYLE_OPTIONS} /></LabeledControl>

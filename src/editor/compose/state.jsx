@@ -7,12 +7,19 @@ import { DEFAULT_SHAPE_ID, getShapeSvg } from '../modes/pattern/shapes'
 import { PRESET_SIZES } from '../shell/aspects'
 import { buildPatternSvg } from '../modes/pattern/render'
 import { computeFrameGlyphs } from '../modes/type/buildTypeSvg'
+import { buildParatypeFlattenGroup } from '../../loops/paratype/flatten.js'
+import { getAppSettings } from '../lib/appSettings'
 import { findLayerDeep } from './helpers'
+import { deleteClip, gcClips } from '../lib/clipStore'
 import { scalePathNodes, shiftNode, rotatePathNodes, normalizePath, normalizePathRings } from './path-math'
 import { shapeToPathNodes } from './shape-math'
 import { booleanCombine, computeBoolean, hasBooleanGeometry, isBooleanable, refitBoolLayer } from './boolean-ops'
 import { presetById, presetParams } from '../../loops/registry'
 import { kineticPresetById, presetComp } from '../../kinetic/presets'
+import { transport } from '../params/transport'
+import { filterById } from '../../filters'
+import { MAX_FILTERS, makeStage, bareChain, normalizeLayersDeep } from './filterChain'
+import { hydrateVideoClips } from '../lib/clipStore'
 
 /* Layer types that own a `color` (and may own a `stroke`). Single source
  * of truth — `useColorTarget` and the inspector both consult this set
@@ -20,6 +27,24 @@ import { kineticPresetById, presetComp } from '../../kinetic/presets'
 export const COLOR_LAYER_TYPES = new Set(['background', 'pattern', 'shape', 'text', 'path', 'bool'])
 
 const DRAFT_KEY = 'kol.editor.draft'
+
+/* Modulation sources that consume the transport's pointer state (window
+ * mouse / stage pointer) — keep in sync with the pointer registrations in
+ * params/sources.js. The layer scan below feeds transport.setPointerInterest
+ * so cursor movement costs nothing while no layer binds a pointer source. */
+const POINTER_SOURCES = new Set(['mouseX', 'mouseY', 'layerX', 'layerY'])
+const isPointerBinding = (v) => v != null && typeof v === 'object' && v.bind === 'mod' && POINTER_SOURCES.has(v.source)
+const hasPointerBindingDeep = (list) => list.some((l) => {
+  for (const k in l) if (isPointerBinding(l[k])) return true
+  /* filter-chain stage params are NESTED (layer.filters[i].params) */
+  if (Array.isArray(l.filters)) {
+    for (const s of l.filters) {
+      const ps = s?.params
+      if (ps) for (const k in ps) if (isPointerBinding(ps[k])) return true
+    }
+  }
+  return Array.isArray(l.children) && hasPointerBindingDeep(l.children)
+})
 
 /**
  * Compose state — the live state for the unified composition view.
@@ -59,7 +84,10 @@ const generateFor = (poolId, modeId, currentColors, locks) => {
   return generatePalette(pool.colors, modeId, currentColors, locks, base)
 }
 
-const newId = (type) => `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`
+/* 8 random base36 chars (~2.8e12 space) — 3 chars + a per-batch-identical
+ * Date.now() collided measurably when minting ~100 ids in one tick
+ * (flattenText mints one per glyph). */
+const newId = (type) => `${type}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 /* Immutable deep patch: match `id` through group/bool children so layers
  * selected from the panel stay editable wherever they live. Untouched
@@ -88,6 +116,16 @@ function patchLayerDeep(list, id, partial) {
     return l
   })
   return changed ? next : list
+}
+
+/* Deep-collect the ids of video layers in a subtree — the only layers with a
+ * persisted IndexedDB clip (saveClip keys the Blob on the layer id). Used to
+ * free those clips when the subtree is deleted. */
+function collectVideoClipIds(layer, out = []) {
+  if (!layer) return out
+  if (layer.srcType === 'video') out.push(layer.id)
+  if (Array.isArray(layer.children)) for (const c of layer.children) collectVideoClipIds(c, out)
+  return out
 }
 
 /* Immutable deep remove of `id`; bool ancestors refit bottom-up. Returns
@@ -141,6 +179,26 @@ function insertLayerDeep(list, parentId, index, layer) {
   return changed ? next : list
 }
 
+/* Immutable deep replace of `id` with a WHOLLY NEW layer (unlike
+ * patchLayerDeep's merge — no old props linger); bool ancestors refit
+ * bottom-up. Returns the input list unchanged when `id` isn't found. */
+function replaceLayerDeep(list, id, replacement) {
+  let changed = false
+  const next = list.map((l) => {
+    if (l.id === id) { changed = true; return replacement }
+    if (Array.isArray(l.children)) {
+      const kids = replaceLayerDeep(l.children, id, replacement)
+      if (kids !== l.children) {
+        changed = true
+        const updated = { ...l, children: kids }
+        return l.type === 'bool' ? refitBoolLayer(updated) : updated
+      }
+    }
+    return l
+  })
+  return changed ? next : list
+}
+
 /* Locate `id` anywhere in the layer tree. Returns { layer, parent (null =
  * top level), index, originX, originY } where origin is the ABSOLUTE canvas
  * origin of the coord space the layer's x/y live in, or null if not found. */
@@ -154,6 +212,63 @@ function locateLayer(list, id, ox = 0, oy = 0, parent = null) {
     }
   }
   return null
+}
+
+/* Restore a container's child to the parent coord space (ungroup /
+ * release-boolean), COMPOSING the container's rotation/flip into the child
+ * so the release is visually a no-op. The renderer and the SVG export both
+ * apply `rotate() scale()` about the container's bbox center (LayerRenderer
+ * layerStyle / build.js wrap), so: the child center mirrors then rotates
+ * about the container center; flip flags XOR (paths bake the mirror into
+ * node geometry instead, exactly as flipLayer does); child rotation
+ * composes, negated under a single-axis mirror (reflection reverses spin). */
+function composeContainerTransform(container, child) {
+  const restored = {
+    ...child,
+    x: (child.x ?? 0) + (container.x ?? 0),
+    y: (child.y ?? 0) + (container.y ?? 0),
+  }
+  const R  = container.rotation ?? 0
+  const fx = !!container.flipX
+  const fy = !!container.flipY
+  if (!R && !fx && !fy) return restored
+  if (child.x == null || child.w == null) return restored  /* unboxed legacy child — nothing to transform about */
+  const sx  = fx ? -1 : 1
+  const sy  = fy ? -1 : 1
+  const det = sx * sy
+  const ccx = (container.x ?? 0) + (container.w ?? 0) / 2
+  const ccy = (container.y ?? 0) + (container.h ?? 0) / 2
+  const cw  = child.w ?? 0
+  const ch  = child.h ?? 0
+  /* child-center offset from container center: mirror first, then rotate —
+   * the same scale-then-rotate order the transform list applies. */
+  let dx = (restored.x + cw / 2 - ccx) * sx
+  let dy = (restored.y + ch / 2 - ccy) * sy
+  if (R) {
+    const a = (R * Math.PI) / 180
+    const cos = Math.cos(a), sin = Math.sin(a)
+    ;[dx, dy] = [dx * cos - dy * sin, dx * sin + dy * cos]
+  }
+  restored.x = ccx + dx - cw / 2
+  restored.y = ccy + dy - ch / 2
+  const rot = R + det * (child.rotation ?? 0)
+  if (rot) restored.rotation = rot
+  else delete restored.rotation
+  if (fx || fy) {
+    if (child.type === 'path' && Array.isArray(child.nodes)) {
+      /* paths never carry flip flags — bake the mirror into the nodes. */
+      const norm = normalizePathRings(
+        scalePathNodes(child.nodes, sx, sy),
+        child.holes?.map((r) => scalePathNodes(r, sx, sy)),
+      )
+      restored.nodes = norm.nodes
+      restored.holes = norm.holes
+    } else {
+      if (fx) restored.flipX = !child.flipX
+      if (fy) restored.flipY = !child.flipY
+    }
+  }
+  return restored
 }
 
 /* Joint bbox of a set of positioned layers — bool-group fallback when the
@@ -187,11 +302,13 @@ export const POSITIONED_TYPES = ['pattern', 'photo', 'shape', 'text', 'path']
    Used at create-time only; once a layer exists, drag/resize mutates x/y/w/h
    directly and anchor is no longer consulted. */
 const PADDING = 80
-function boxFromAnchor(anchor, w, h) {
+function boxFromAnchor(anchor, w, h, vh = CANVAS_H) {
+  /* `vh` = the LIVE virtual canvas height (CANVAS_W / ratio) — on non-square
+   * canvases the 1080 constant would center/anchor against the wrong frame. */
   const right  = CANVAS_W - w - PADDING
-  const bottom = CANVAS_H - h - PADDING
+  const bottom = vh - h - PADDING
   const cx     = (CANVAS_W - w) / 2
-  const cy     = (CANVAS_H - h) / 2
+  const cy     = (vh - h) / 2
   switch (anchor) {
     case 'TL': return { x: PADDING, y: PADDING }
     case 'TC': return { x: cx,      y: PADDING }
@@ -288,12 +405,12 @@ export const LAYER_TYPES = [
   { id: 'misc',       label: 'Misc' },
 ]
 
-const layerDefaults = (type) => {
+const layerDefaults = (type, vh = CANVAS_H) => {
   const cover = (extra) => ({ ...extra })
-  const placed = (w, h, extra) => ({ ...boxFromAnchor('C', w, h), w, h, ...extra })
+  const placed = (w, h, extra) => ({ ...boxFromAnchor('C', w, h, vh), w, h, ...extra })
   /* New pattern + photo layers default to full-canvas bounds — same visual
    * starting point as the old cover behavior, but draggable / resizable. */
-  const fullCanvas = (extra) => ({ x: 0, y: 0, w: CANVAS_W, h: CANVAS_H, ...extra })
+  const fullCanvas = (extra) => ({ x: 0, y: 0, w: CANVAS_W, h: vh, ...extra })
   switch (type) {
     case 'background': return cover({ color: 'palette:primary' })
     case 'pattern':    return fullCanvas({ ...PATTERN_DEFAULTS, color: 'palette:secondary' })
@@ -304,30 +421,37 @@ const layerDefaults = (type) => {
      * them like any other prop. */
     case 'loop': {
       const preset = presetById()   /* first preset (Circle morph) */
-      return placed(480, 480, {
+      /* Full-frame, matching labs — a generative loop fills the export frame
+       * (labs pages render one generator per frame; there is no fixed box).
+       * Resizable/movable afterward like any layer. */
+      return fullCanvas({
         loopGroup:   'shape',
         presetId:    preset.id,
         presetLabel: preset.label,
         loopId:      preset.loop,
         ...presetParams(preset),
+        themeId:     getAppSettings().defaultTheme,
       })
     }
+    /* Para Type — a generative composition; fills the frame like the loops. */
     case 'misc': {
       const preset = presetById('paratype-o')
-      return placed(480, 480, {
+      return fullCanvas({
         loopGroup:   'paratype',
         presetId:    preset.id,
         presetLabel: preset.label,
         loopId:      preset.loop,
         ...presetParams(preset),
+        themeId:     getAppSettings().defaultTheme,
       })
     }
     /* Kinetic-type layer — a labs TYPE composition on the KineticType engine
      * (src/kinetic). The composition rides OPAQUELY on `layer.comp` (like
-     * loop `forms`) — no flat param spread, no bind dots on its internals. */
+     * loop `forms`) — no flat param spread, no bind dots on its internals.
+     * Fills the frame like the labs Type Lab (a full-frame composition). */
     case 'kinetic': {
       const preset = kineticPresetById()   /* first preset (Sunburst) */
-      return placed(600, 600, {
+      return fullCanvas({
         presetId:    preset.id,
         presetLabel: preset.label,
         comp:        presetComp(preset),
@@ -341,7 +465,11 @@ const layerDefaults = (type) => {
   }
 }
 
-export function ComposeStateProvider({ children }) {
+/* `persistDraft={false}` (mobile chrome, output window) opts out of the WHOLE
+ * draft surface: no restore prompt, no `kol.editor.draft` reads/writes/deletes,
+ * no load-time clip GC — an ephemeral session must never touch the desktop's
+ * draft or reap its IndexedDB clips. */
+export function ComposeStateProvider({ children, persistDraft = true }) {
   /* ─── Frame: aspect + canvas dimensions ───
    * `aspect` is the preset label (or 'custom'); `canvasW`/`canvasH` are the
    * real pixel output dimensions. The 1080-virtual coordinate space is
@@ -349,10 +477,16 @@ export function ComposeStateProvider({ children }) {
    * the export resolution. Presets set both in lockstep via setAspect;
    * custom sizing writes W/H directly and flips aspect to 'custom', so
    * there's one write path and no ratio drift. */
-  const [aspect, setAspectState] = useState('1:1')
+  const [aspect, setAspectState] = useState('4:5')
   const [canvasW, setCanvasW] = useState(1080)
   const [canvasH, setCanvasH] = useState(1080)
   const canvasRatio = canvasW / canvasH
+  /* Live virtual canvas height — the 1080-wide virtual space at the current
+   * ratio (same value drag-create derives in CanvasArea). Read through a ref
+   * so the stable layer-creation callbacks place layers correctly on
+   * non-square canvases. */
+  const virtualHRef = useRef(CANVAS_H)
+  virtualHRef.current = CANVAS_W / canvasRatio
 
   const setAspect = useCallback((id) => {
     setAspectState(id)
@@ -488,23 +622,35 @@ export function ComposeStateProvider({ children }) {
   const txRef          = useRef(null)         /* snapshot at transaction-begin, or null */
   const layersRef      = useRef(layers)       /* current layers — read by tx commit */
   const selectedIdsRef = useRef(selectedIds)  /* current selection — read by tx commit */
+  const pastRef        = useRef(past)         /* current stacks — read by undo/redo */
+  const futureRef      = useRef(future)
   layersRef.current      = layers
   selectedIdsRef.current = selectedIds
+  pastRef.current        = past
+  futureRef.current      = future
 
   const snap = () => ({ layers: layersRef.current, selectedIds: selectedIdsRef.current })
 
+  /* History writes happen at the TOP LEVEL of these callbacks — never inside
+   * a setState updater. StrictMode double-invokes updaters, so a nested
+   * setPast/setFuture would push duplicate entries in dev. Prev is read from
+   * the refs, next is computed once, then every set is issued with a plain
+   * value; the refs are updated eagerly so same-tick sequences (transaction
+   * commits, chained removes) stay consistent before React re-renders. */
   const setLayersTracked = useCallback((updater) => {
-    setLayers((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater
-      if (next === prev) return prev
-      if (txRef.current === null) {
-        /* discrete action — push pre-state (layers + selection) to past. */
-        const snapshot = { layers: prev, selectedIds: selectedIdsRef.current }
-        setPast((p) => [...p, snapshot].slice(-100))
-        setFuture([])
-      }
-      return next
-    })
+    const prev = layersRef.current
+    const next = typeof updater === 'function' ? updater(prev) : updater
+    if (next === prev) return
+    if (txRef.current === null) {
+      /* discrete action — push pre-state (layers + selection) to past. */
+      const nextPast = [...pastRef.current, { layers: prev, selectedIds: selectedIdsRef.current }].slice(-100)
+      pastRef.current   = nextPast
+      futureRef.current = []
+      setPast(nextPast)
+      setFuture([])
+    }
+    layersRef.current = next
+    setLayers(next)
   }, [])
 
   const beginTransaction  = useCallback(() => {
@@ -515,31 +661,49 @@ export function ComposeStateProvider({ children }) {
     const snapshot = txRef.current
     txRef.current = null
     if (snapshot.layers !== layersRef.current || snapshot.selectedIds !== selectedIdsRef.current) {
-      setPast((p) => [...p, snapshot].slice(-100))
+      const nextPast = [...pastRef.current, snapshot].slice(-100)
+      pastRef.current   = nextPast
+      futureRef.current = []
+      setPast(nextPast)
       setFuture([])
     }
   }, [])
 
   const undo = useCallback(() => {
-    setPast((p) => {
-      if (p.length === 0) return p
-      const prev = p[p.length - 1]
-      setFuture((f) => [snap(), ...f].slice(0, 100))
-      setLayers(prev.layers)
-      setSelectedIds(prev.selectedIds)
-      return p.slice(0, -1)
-    })
+    /* Mid-transaction (drag in flight) undo would rewind layers while the
+     * gesture keeps writing patches, then commit would push the pre-drag
+     * snapshot onto the rewound past — corrupted history. Bail instead. */
+    if (txRef.current !== null) return
+    const p = pastRef.current
+    if (p.length === 0) return
+    const restored   = p[p.length - 1]
+    const nextPast   = p.slice(0, -1)
+    const nextFuture = [snap(), ...futureRef.current].slice(0, 100)  /* snap() BEFORE the refs move */
+    pastRef.current        = nextPast
+    futureRef.current      = nextFuture
+    layersRef.current      = restored.layers
+    selectedIdsRef.current = restored.selectedIds
+    setPast(nextPast)
+    setFuture(nextFuture)
+    setLayers(restored.layers)
+    setSelectedIds(restored.selectedIds)
   }, [])
 
   const redo = useCallback(() => {
-    setFuture((f) => {
-      if (f.length === 0) return f
-      const next = f[0]
-      setPast((p) => [...p, snap()].slice(-100))
-      setLayers(next.layers)
-      setSelectedIds(next.selectedIds)
-      return f.slice(1)
-    })
+    if (txRef.current !== null) return  /* mid-transaction — see undo */
+    const f = futureRef.current
+    if (f.length === 0) return
+    const restored   = f[0]
+    const nextPast   = [...pastRef.current, snap()].slice(-100)  /* snap() BEFORE the refs move */
+    const nextFuture = f.slice(1)
+    pastRef.current        = nextPast
+    futureRef.current      = nextFuture
+    layersRef.current      = restored.layers
+    selectedIdsRef.current = restored.selectedIds
+    setPast(nextPast)
+    setFuture(nextFuture)
+    setLayers(restored.layers)
+    setSelectedIds(restored.selectedIds)
   }, [])
 
   const isSeedPool    = poolFor(poolId).isSeed
@@ -585,6 +749,14 @@ export function ComposeStateProvider({ children }) {
     if (layer.stroke !== undefined) setPaintStroke(resolveColor(layer.stroke, paletteForSyncRef.current) ?? null)
   }, [selectedId])
 
+  /* Pointer-interest sync: the transport gates its mousemove / stage-pointer
+   * notifies on whether ANY layer binds a pointer source — without the gate,
+   * every cursor move re-rendered every transport subscriber even in a fully
+   * un-bound editor. Re-scans on layers identity change only. */
+  useEffect(() => {
+    transport.setPointerInterest(hasPointerBindingDeep(layers))
+  }, [layers])
+
   /* Layer actions — go through setLayersTracked so history captures them.
    * Optional `extras` merges over the type's defaults, e.g.
    *   addLayer('shape', { variant: 'wordmark' })
@@ -609,18 +781,32 @@ export function ComposeStateProvider({ children }) {
       : {}
     setLayersTracked((prev) => [
       ...prev,
-      { id, type, visible: true, opacity: 1, blend: 'normal', ...layerDefaults(type), ...paintExtras, ...extras },
+      { id, type, visible: true, opacity: 1, blend: 'normal', ...layerDefaults(type, virtualHRef.current), ...paintExtras, ...extras },
     ])
     /* Adding a layer always moves focus to the new layer — canvas (or
      * whatever was selected) gets replaced. Until the layer is committed,
      * the [+] button and its dropdown should preserve canvas selection
      * (handled in the doc-down deselect listener). */
     setSelectedIds([id])
+    /* Returned so drop-to-create callers (OS file drop → photo layer) can
+     * key side-channels on the new id — e.g. clipStore.saveClip for a dropped
+     * video clip. Existing callers ignore the return. */
+    return id
   }, [setLayersTracked])
 
   const removeLayer = useCallback((id) => {
-    setLayersTracked((prev) => prev.filter((l) => l.id !== id))
-    setSelectedIds((prev) => prev.filter((sid) => sid !== id))
+    /* Free any IndexedDB video clips owned by the removed subtree (the id may
+     * be a group/bool wrapping video layers) — else uploaded/dropped clips leak
+     * in IndexedDB forever. ponytail: fires on delete; a delete→undo→reload in
+     * one session loses the clip (undo history doesn't survive reload anyway). */
+    const removed = findLayerDeep(layersRef.current, id)
+    if (removed) collectVideoClipIds(removed).forEach((vid) => deleteClip(vid))
+    /* Deep remove — the id may live inside a group/bool (removeLayerDeep
+     * refits bool ancestors, same recompute path as patchLayerDeep). It
+     * returns the input list unchanged when the id isn't found, so
+     * setLayersTracked's identity bail skips the history push on a no-op. */
+    setLayersTracked((prev) => removeLayerDeep(prev, id))
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((sid) => sid !== id) : prev))
   }, [setLayersTracked])
 
   /* Delete every selected layer in one transaction so undo restores all of
@@ -639,6 +825,105 @@ export function ComposeStateProvider({ children }) {
     setLayersTracked((prev) => patchLayerDeep(prev, id, partial))
   }, [setLayersTracked])
 
+  /* ─── Filter chain actions (labs post-FX chain) ───
+   * A layer's effects live in `filters: [{ id, key, enabled, params }]`
+   * (≤ MAX_FILTERS; see filterChain.js). Rules enforced here: at most ONE
+   * engine (GL) stage, always LAST — canvas adds insert before it; moves
+   * never carry a stage across the engine boundary. All writes go through
+   * setLayersTracked (history) via a shared read-modify helper; no-op edits
+   * return the input list unchanged, so they never push a history entry. */
+  const withChain = useCallback((layerId, fn) => {
+    setLayersTracked((prev) => {
+      const layer = findLayerDeep(prev, layerId)
+      if (!layer) return prev
+      const chain = bareChain(layer)
+      const next = fn(chain, layer)
+      if (!next || next === chain) return prev
+      return patchLayerDeep(prev, layerId, { filters: next })
+    })
+  }, [setLayersTracked])
+
+  const addFilter = useCallback((layerId, filterId) => {
+    const def = filterById(filterId)
+    if (!def) return
+    withChain(layerId, (chain) => {
+      if (chain.length >= MAX_FILTERS) return null
+      const engineIdx = chain.findIndex((s) => filterById(s.id)?.kind === 'engine')
+      if (def.kind === 'engine') {
+        if (engineIdx >= 0) return null            /* one engine max */
+        return [...chain, makeStage(filterId)]     /* engine is terminal */
+      }
+      /* Tier order: canvas → pixi → engine. A pixi stage sits after canvas
+       * stages, before the terminal engine; a canvas stage sits before the
+       * pixi batch AND the engine. */
+      let at
+      if (def.kind === 'pixi') {
+        at = engineIdx >= 0 ? engineIdx : chain.length
+      } else {
+        const boundary = chain.findIndex((s) => {
+          const k = filterById(s.id)?.kind
+          return k === 'pixi' || k === 'engine'
+        })
+        at = boundary >= 0 ? boundary : chain.length
+      }
+      const next = [...chain]
+      next.splice(at, 0, makeStage(filterId))
+      return next
+    })
+  }, [withChain])
+
+  const removeFilter = useCallback((layerId, index) => {
+    withChain(layerId, (chain) => (
+      index >= 0 && index < chain.length ? chain.filter((_, i) => i !== index) : null
+    ))
+  }, [withChain])
+
+  const toggleFilter = useCallback((layerId, index) => {
+    withChain(layerId, (chain) => (
+      index >= 0 && index < chain.length
+        ? chain.map((s, i) => (i === index ? { ...s, enabled: s.enabled === false } : s))
+        : null
+    ))
+  }, [withChain])
+
+  const moveFilter = useCallback((layerId, from, to) => {
+    withChain(layerId, (chain) => {
+      if (from === to || from < 0 || from >= chain.length || to < 0 || to >= chain.length) return null
+      const next = [...chain]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      /* Engine stays terminal — reject any order that puts a canvas stage
+       * after it (or the engine anywhere but last). */
+      const engineIdx = next.findIndex((s) => filterById(s.id)?.kind === 'engine')
+      if (engineIdx >= 0 && engineIdx !== next.length - 1) return null
+      return next
+    })
+  }, [withChain])
+
+  /* Merge a params patch into stage `index` (discrete history — the Effects
+   * panel's coalesced slider writes build the array themselves via
+   * useLayerEdit and patch `filters` directly). */
+  const patchFilter = useCallback((layerId, index, paramsPatch) => {
+    withChain(layerId, (chain) => (
+      index >= 0 && index < chain.length
+        ? chain.map((s, i) => (i === index ? { ...s, params: { ...s.params, ...paramsPatch } } : s))
+        : null
+    ))
+  }, [withChain])
+
+  /* Swap stage `index` to a different filter (params reset to its defaults,
+   * enabled preserved). Engine placement rules re-checked like addFilter. */
+  const replaceFilter = useCallback((layerId, index, filterId) => {
+    const def = filterById(filterId)
+    if (!def) return
+    withChain(layerId, (chain) => {
+      if (index < 0 || index >= chain.length) return null
+      const otherEngine = chain.some((s, i) => i !== index && filterById(s.id)?.kind === 'engine')
+      if (def.kind === 'engine' && (otherEngine || index !== chain.length - 1)) return null
+      return chain.map((s, i) => (i === index ? { ...makeStage(filterId), key: s.key, enabled: s.enabled } : s))
+    })
+  }, [withChain])
+
   const toggleLayer = useCallback((id) => {
     setLayersTracked((prev) => prev.map((l) => (l.id === id ? { ...l, visible: !l.visible } : l)))
   }, [setLayersTracked])
@@ -651,19 +936,23 @@ export function ComposeStateProvider({ children }) {
    * into the node geometry (so node-edit chrome stays true to the render);
    * every other positioned layer toggles a flipX/flipY flag that
    * LayerRenderer / the SVG export builder apply as a transform. Cover
-   * types and legacy unbounded layers are skipped — no box to flip about. */
+   * types and legacy unbounded layers are skipped — no box to flip about.
+   * Resolves DEEP (patchLayerDeep) so group/bool children flip too, with
+   * bool ancestors refitting; skips return the input list unchanged so
+   * no-ops never push a history entry. */
   const flipLayer = useCallback((id, axis) => {
-    setLayersTracked((prev) => prev.map((l) => {
-      if (l.id !== id || l.locked || COVER_TYPES.includes(l.type)) return l
+    setLayersTracked((prev) => {
+      const l = findLayerDeep(prev, id)
+      if (!l || l.locked || COVER_TYPES.includes(l.type)) return prev
       if (l.type === 'path' && Array.isArray(l.nodes)) {
         const sx = axis === 'h' ? -1 : 1
         const sy = axis === 'v' ? -1 : 1
         const norm = normalizePathRings(scalePathNodes(l.nodes, sx, sy), l.holes?.map((r) => scalePathNodes(r, sx, sy)))
-        return { ...l, nodes: norm.nodes, holes: norm.holes }
+        return patchLayerDeep(prev, id, { nodes: norm.nodes, holes: norm.holes })
       }
-      if (l.x == null || l.w == null) return l
-      return axis === 'h' ? { ...l, flipX: !l.flipX } : { ...l, flipY: !l.flipY }
-    }))
+      if (l.x == null || l.w == null) return prev
+      return patchLayerDeep(prev, id, axis === 'h' ? { flipX: !l.flipX } : { flipY: !l.flipY })
+    })
   }, [setLayersTracked])
 
   /* Flip every selected layer, one transaction → one undo entry. */
@@ -692,9 +981,13 @@ export function ComposeStateProvider({ children }) {
     const base = targets[0]
     const box = computeBoolean(targets, op)?.bounds ?? jointBbox(targets)
     const id = newId('bool')
+    let didCreate = false
     setLayersTracked((prev) => {
       const targetIds = new Set(targets.map((t) => t.id))
       const topIdx = Math.max(...prev.map((l, i) => (targetIds.has(l.id) ? i : -1)))
+      /* No target found in prev (stale ref between compute and set) — bail
+       * rather than dropping the new layer and pointing selection at it. */
+      if (topIdx < 0) return prev
       const newLayer = {
         id, type: 'bool', op,
         visible: true, opacity: base.opacity ?? 1, blend: base.blend ?? 'normal',
@@ -709,9 +1002,10 @@ export function ComposeStateProvider({ children }) {
         if (i === topIdx) next.push(newLayer)
         if (!targetIds.has(l.id)) next.push(l)
       })
+      didCreate = true
       return next
     })
-    setSelectedIds([id])
+    if (didCreate) setSelectedIds([id])
   }, [selectedIds, setLayersTracked])
 
   /* Flatten — bake boolean geometry to a real `path` layer (the old
@@ -731,9 +1025,11 @@ export function ComposeStateProvider({ children }) {
     const norm = normalizePathRings(result.nodes, result.holes)
     const base = targets[0]
     const id = newId('path')
+    let didCreate = false
     setLayersTracked((prev) => {
       const targetIds = new Set(targets.map((t) => t.id))
       const topIdx = Math.max(...prev.map((l, i) => (targetIds.has(l.id) ? i : -1)))
+      if (topIdx < 0) return prev  /* stale targets — see booleanGroup */
       const newLayer = {
         id, type: 'path', visible: true, opacity: base.opacity ?? 1, blend: base.blend ?? 'normal',
         nodes: norm.nodes, holes: norm.holes, closed: true,
@@ -747,9 +1043,10 @@ export function ComposeStateProvider({ children }) {
         if (i === topIdx) next.push(newLayer)
         if (!targetIds.has(l.id)) next.push(l)
       })
+      didCreate = true
       return next
     })
-    setSelectedIds([id])
+    if (didCreate) setSelectedIds([id])
   }, [selectedIds, setLayersTracked])
 
   /* Convert a primitive shape layer (rect / ellipse / triangle / polygon /
@@ -797,19 +1094,19 @@ export function ComposeStateProvider({ children }) {
     }))
   }, [setLayersTracked])
 
+  /* Duplicate resolves DEEP — a nested child clones in place, inserted
+   * right above the original within its parent (bool ancestors refit). */
   const duplicateLayer = useCallback((id) => {
     setLayersTracked((prev) => {
-      const i = prev.findIndex((l) => l.id === id)
-      if (i < 0) return prev
-      const src = prev[i]
+      const found = locateLayer(prev, id)
+      if (!found) return prev
+      const src = found.layer
       const clone = { ...src, id: newId(src.type) }
       /* Group/bool children get fresh ids too — duplicated child ids would
        * make panel-side child edits write into both copies at once. */
       if (Array.isArray(clone.children)) clone.children = reidLayers(clone.children)
       if (clone.x != null) { clone.x += 24; clone.y += 24 }
-      const next = [...prev]
-      next.splice(i + 1, 0, clone)
-      return next
+      return insertLayerDeep(prev, found.parent?.id ?? null, found.index + 1, clone)
     })
   }, [setLayersTracked])
 
@@ -824,37 +1121,54 @@ export function ComposeStateProvider({ children }) {
     setCurrentPresetName(null)
   }, [setLayersTracked])
 
-  /* Group multiple layers into a single `group` layer. Refuses if fewer than
-   * 2 layers passed, or if any of them is itself a group (flat groups only
-   * for v1). Children store group-relative coords so transforming the group
-   * moves them as a unit. The group lands at the top of the stack; the user
-   * can reorder afterward. */
+  /* Group multiple layers into a single `group` layer. Refuses if fewer
+   * than 2 resolvable layers. Targets resolve DEEP — nested children are
+   * pulled out of their parents (bool ancestors refit), and groups group
+   * into groups (standard group-of-groups model; reparentLayer already
+   * permits nesting). Children are ordered by DOCUMENT z-order, bottom
+   * first — never selection/click order (same rule booleanGroup applies) —
+   * and store group-relative coords so transforming the group moves them
+   * as a unit. The group lands at the top of the stack; the user can
+   * reorder afterward. */
   const groupLayers = useCallback((ids) => {
     if (!Array.isArray(ids) || ids.length < 2) return
     const groupId = newId('group')
     let didCreate = false
     setLayersTracked((prev) => {
-      const selected = ids.map((id) => prev.find((l) => l.id === id)).filter(Boolean)
-      if (selected.length < 2) return prev
-      if (selected.some((l) => l.type === 'group')) return prev
+      /* Depth-first walk collects targets in tree (z) order at ABSOLUTE
+       * canvas coords. A target nested inside another target rides with
+       * its container — don't grab it twice. */
+      const idsSet = new Set(ids)
+      const picked = []
+      const collect = (list, ox, oy) => {
+        for (const l of list) {
+          if (idsSet.has(l.id)) {
+            picked.push({ ...l, x: ox + (l.x ?? 0), y: oy + (l.y ?? 0) })
+            continue
+          }
+          if (Array.isArray(l.children)) collect(l.children, ox + (l.x ?? 0), oy + (l.y ?? 0))
+        }
+      }
+      collect(prev, 0, 0)
+      if (picked.length < 2) return prev
 
-      const xs  = selected.map((l) => l.x ?? 0)
-      const ys  = selected.map((l) => l.y ?? 0)
-      const xs2 = selected.map((l) => (l.x ?? 0) + (l.w ?? 0))
-      const ys2 = selected.map((l) => (l.y ?? 0) + (l.h ?? 0))
+      const xs  = picked.map((l) => l.x)
+      const ys  = picked.map((l) => l.y)
+      const xs2 = picked.map((l) => l.x + (l.w ?? 0))
+      const ys2 = picked.map((l) => l.y + (l.h ?? 0))
       const gx = Math.min(...xs)
       const gy = Math.min(...ys)
       const gw = Math.max(...xs2) - gx
       const gh = Math.max(...ys2) - gy
 
-      const children = selected.map((l) => ({
+      const children = picked.map((l) => ({
         ...l,
-        x: (l.x ?? 0) - gx,
-        y: (l.y ?? 0) - gy,
+        x: l.x - gx,
+        y: l.y - gy,
       }))
 
-      const idsSet = new Set(ids)
-      const remaining = prev.filter((l) => !idsSet.has(l.id))
+      let remaining = prev
+      for (const l of picked) remaining = removeLayerDeep(remaining, l.id)
       const group = {
         id: groupId,
         type: 'group',
@@ -871,8 +1185,9 @@ export function ComposeStateProvider({ children }) {
   }, [setLayersTracked])
 
   /* Ungroup — replace a group layer with its children, restoring their
-   * canvas-absolute coords. Selects the freed children so the user can keep
-   * working with them. */
+   * canvas-absolute coords WITH the group's rotation/flip composed in
+   * (composeContainerTransform) so ungrouping is visually a no-op. Selects
+   * the freed children so the user can keep working with them. */
   const ungroupLayer = useCallback((id) => {
     let restoredIds = []
     setLayersTracked((prev) => {
@@ -880,11 +1195,7 @@ export function ComposeStateProvider({ children }) {
       if (i < 0) return prev
       const group = prev[i]
       if (group.type !== 'group') return prev
-      const restored = (group.children ?? []).map((c) => ({
-        ...c,
-        x: (c.x ?? 0) + (group.x ?? 0),
-        y: (c.y ?? 0) + (group.y ?? 0),
-      }))
+      const restored = (group.children ?? []).map((c) => composeContainerTransform(group, c))
       restoredIds = restored.map((c) => c.id)
       const next = [...prev]
       next.splice(i, 1, ...restored)
@@ -894,7 +1205,8 @@ export function ComposeStateProvider({ children }) {
   }, [setLayersTracked])
 
   /* Release a boolean (Figma's release, the un-boolean): the bool layer is
-   * replaced in place by its children at their canvas-absolute positions,
+   * replaced in place by its children at their canvas-absolute positions
+   * (the container's rotation/flip composed in, like ungroupLayer),
    * original z-order preserved. Selection moves to the released layers.
    * Distinct from flattenSelected, which bakes to one path. `id` defaults
    * to the current selection. Top-level bools only, like ungroupLayer. */
@@ -905,11 +1217,7 @@ export function ComposeStateProvider({ children }) {
       if (i < 0) return prev
       const bool = prev[i]
       if (bool.type !== 'bool') return prev
-      const restored = (bool.children ?? []).map((c) => ({
-        ...c,
-        x: (c.x ?? 0) + (bool.x ?? 0),
-        y: (c.y ?? 0) + (bool.y ?? 0),
-      }))
+      const restored = (bool.children ?? []).map((c) => composeContainerTransform(bool, c))
       restoredIds = restored.map((c) => c.id)
       const next = [...prev]
       next.splice(i, 1, ...restored)
@@ -961,38 +1269,52 @@ export function ComposeStateProvider({ children }) {
   /* Align the currently-selected positioned layers to their common bbox.
    * `axis` is 'h' or 'v'; `mode` is 'start' / 'center' / 'end' (mapping
    * to left/center/right or top/middle/bottom respectively). Locked
-   * layers and `canvas` are skipped. */
+   * layers and `canvas` are skipped. Targets resolve DEEP: nested layers
+   * align through their ABSOLUTE canvas coords (locateLayer supplies each
+   * coord-space origin) and write back parent-relative via patchLayerDeep
+   * (bool ancestors refit). Already-aligned selections return the input
+   * unchanged — no junk history entry. */
   const alignSelected = useCallback((axis, mode) => {
     setLayersTracked((prev) => {
       const ids = selectedIdsRef.current.filter((id) => id !== 'canvas')
-      const selected = ids
-        .map((id) => prev.find((l) => l.id === id))
-        .filter((l) => l && typeof l.x === 'number' && typeof l.y === 'number' && !l.locked)
-      if (selected.length < 2) return prev
+      const located = ids
+        .map((id) => locateLayer(prev, id))
+        .filter((f) => f && typeof f.layer.x === 'number' && typeof f.layer.y === 'number' && !f.layer.locked)
+      if (located.length < 2) return prev
 
-      const xs  = selected.map((l) => l.x)
-      const ys  = selected.map((l) => l.y)
-      const xs2 = selected.map((l) => l.x + (l.w ?? 0))
-      const ys2 = selected.map((l) => l.y + (l.h ?? 0))
+      const xs  = located.map((f) => f.originX + f.layer.x)
+      const ys  = located.map((f) => f.originY + f.layer.y)
+      const xs2 = located.map((f, i) => xs[i] + (f.layer.w ?? 0))
+      const ys2 = located.map((f, i) => ys[i] + (f.layer.h ?? 0))
       const bx = Math.min(...xs)
       const by = Math.min(...ys)
       const bw = Math.max(...xs2) - bx
       const bh = Math.max(...ys2) - by
 
-      const idsSet = new Set(selected.map((l) => l.id))
-      return prev.map((l) => {
-        if (!idsSet.has(l.id)) return l
+      let next = prev
+      located.forEach((f, i) => {
+        const l = f.layer
+        let ax = xs[i]
+        let ay = ys[i]
         if (axis === 'h') {
-          if (mode === 'start')  return { ...l, x: bx }
-          if (mode === 'center') return { ...l, x: bx + (bw - (l.w ?? 0)) / 2 }
-          if (mode === 'end')    return { ...l, x: bx + bw - (l.w ?? 0) }
+          if (mode === 'start')  ax = bx
+          if (mode === 'center') ax = bx + (bw - (l.w ?? 0)) / 2
+          if (mode === 'end')    ax = bx + bw - (l.w ?? 0)
         } else if (axis === 'v') {
-          if (mode === 'start')  return { ...l, y: by }
-          if (mode === 'center') return { ...l, y: by + (bh - (l.h ?? 0)) / 2 }
-          if (mode === 'end')    return { ...l, y: by + bh - (l.h ?? 0) }
+          if (mode === 'start')  ay = by
+          if (mode === 'center') ay = by + (bh - (l.h ?? 0)) / 2
+          if (mode === 'end')    ay = by + bh - (l.h ?? 0)
         }
-        return l
+        /* Re-locate in the evolving list — an earlier patch's bool-ancestor
+         * refit may have re-split this layer's origin/relative coords. */
+        const cur = locateLayer(next, l.id)
+        if (!cur) return
+        const nx = ax - cur.originX
+        const ny = ay - cur.originY
+        if (axis === 'h' && nx !== cur.layer.x) next = patchLayerDeep(next, l.id, { x: nx })
+        if (axis === 'v' && ny !== cur.layer.y) next = patchLayerDeep(next, l.id, { y: ny })
       })
+      return next
     })
   }, [setLayersTracked])
 
@@ -1001,10 +1323,12 @@ export function ComposeStateProvider({ children }) {
    * Renders the pattern via `buildPatternSvg` against the current palette,
    * stores the resulting SVG string on the shape, and replaces the original
    * pattern layer in place. One-way: re-edit by re-inserting from the
-   * library entry. Tracked through history; undo restores. */
+   * library entry. Resolves DEEP so a pattern nested in a group flattens
+   * too (replaceLayerDeep — coords stay parent-relative). Tracked through
+   * history; undo restores. */
   const flattenPattern = useCallback((layerId) => {
     setLayersTracked((prev) => {
-      const layer = prev.find((l) => l.id === layerId)
+      const layer = findLayerDeep(prev, layerId)
       if (!layer || layer.type !== 'pattern') return prev
       const shapeSvg = getShapeSvg(layer.shapeId, layer.customSvg)
       if (!shapeSvg) return prev
@@ -1047,16 +1371,17 @@ export function ComposeStateProvider({ children }) {
         blend:    layer.blend   ?? 'normal',
         children: [shape],
       }
-      return prev.map((l) => (l.id === layerId ? group : l))
+      return replaceLayerDeep(prev, layerId, group)
     })
   }, [setLayersTracked, palette])
 
   /* Flatten a text layer to a `group` of per-glyph `shape{kind:'flatten'}`
    * layers. Each glyph becomes its own shape — sized to the glyph's actual
    * path bounding box (trimmed to the visual shape, not the line height) so
-   * letters can be moved / restyled independently after flattening. */
+   * letters can be moved / restyled independently after flattening.
+   * Resolves DEEP — a text layer nested in a group flattens in place. */
   const flattenText = useCallback(async (layerId) => {
-    const layer = layersRef.current.find((l) => l.id === layerId)
+    const layer = findLayerDeep(layersRef.current, layerId)
     if (!layer || layer.type !== 'text') return
     const resolvedColor = resolveColor(layer.color, palette) ?? '#FFFFFF'
     /* Compute glyph paths in layer-relative coords (x=0,y=0). */
@@ -1111,7 +1436,23 @@ export function ComposeStateProvider({ children }) {
       blend:    layer.blend   ?? 'normal',
       children,
     }
-    setLayersTracked((prev) => prev.map((l) => (l.id === layerId ? group : l)))
+    setLayersTracked((prev) => replaceLayerDeep(prev, layerId, group))
+  }, [setLayersTracked, palette])
+
+  /* Flatten a paratype misc layer to a group of per-glyph VECTOR shapes
+   * (real engine paths — loops/paratype/flatten.js). In-place group
+   * replacement like flattenPattern; one-way, undo restores. */
+  const flattenParatype = useCallback((layerId) => {
+    setLayersTracked((prev) => {
+      const layer = findLayerDeep(prev, layerId)
+      if (!layer) return prev
+      const colors = {
+        fg: resolveColor(layer.fg, palette) ?? '#e8e4dc',
+        bg: layer.bgOn === false ? null : (resolveColor(layer.bg, palette) ?? '#0b0b0e'),
+      }
+      const group = buildParatypeFlattenGroup(layer, colors, newId)
+      return group ? replaceLayerDeep(prev, layerId, group) : prev
+    })
   }, [setLayersTracked, palette])
 
   /* Add a flattened group from a Type Lab frame spec — used by "Send to
@@ -1148,7 +1489,7 @@ export function ComposeStateProvider({ children }) {
 
     const groupW = frame.w ?? 600
     const groupH = frame.h ?? (size * 1.2)
-    const { x, y } = boxFromAnchor('C', groupW, groupH)
+    const { x, y } = boxFromAnchor('C', groupW, groupH, virtualHRef.current)
 
     const group = {
       id:       newId('group'),
@@ -1163,8 +1504,10 @@ export function ComposeStateProvider({ children }) {
 
   /* Re-id layers (and nested group/bool children) so loaded presets don't
    * collide with anything already in the canvas — each load produces fresh
-   * ids regardless of what the source preset stored. */
-  const reidLayers = (arr) => (Array.isArray(arr) ? arr : []).map((l) => ({
+   * ids regardless of what the source preset stored. Doubles as the preset/
+   * settings-file compat seam: every layer routes through the filter-chain
+   * normalizer (legacy `filterId` + flat params → `filters` chain). */
+  const reidLayers = (arr) => normalizeLayersDeep(Array.isArray(arr) ? arr : []).map((l) => ({
     ...l,
     id: newId(l.type ?? 'layer'),
     ...(Array.isArray(l.children)
@@ -1176,7 +1519,9 @@ export function ComposeStateProvider({ children }) {
    * the canvas (aspect + layers + bound palette); partial-chunk intent
    * appends layers to the current canvas. Uses the raw useState setters
    * so the wrapper-side resets in `setPoolId` / `setModeId` don't trample
-   * the loaded palette. Tracked through history; undo restores. */
+   * the loaded palette. Only LAYERS are history-tracked — undo restores
+   * the layer stack, but aspect / canvas size / palette are raw setters
+   * and are NOT undone. */
   const loadPreset = useCallback((preset) => {
     if (!preset) return
     /* Raw setters so a saved custom canvas keeps its stored W/H. Presets
@@ -1235,7 +1580,7 @@ export function ComposeStateProvider({ children }) {
         id: newId('pattern'),
         type: 'pattern',
         visible: true, opacity: 1, blend: 'normal',
-        x: 0, y: 0, w: CANVAS_W, h: CANVAS_H,
+        x: 0, y: 0, w: CANVAS_W, h: virtualHRef.current,
         ...patternFromSpec(item),
       }
       setLayersTracked((prev) => [...prev, layer])
@@ -1246,7 +1591,7 @@ export function ComposeStateProvider({ children }) {
       const w = 600, h = 120
       const pos = at
         ? { x: at.vx - w / 2, y: at.vy - h / 2 }
-        : boxFromAnchor('C', w, h)
+        : boxFromAnchor('C', w, h, virtualHRef.current)
       const layer = {
         id: newId('text'),
         type: 'text',
@@ -1275,20 +1620,37 @@ export function ComposeStateProvider({ children }) {
    * Restored from on first mount if a draft is present and the user confirms. */
   const modal = useModal()
   const restoreCheckedRef = useRef(false)
+  /* Autosave stays gated until the restore flow resolves — the autosave
+   * effect fires at mount with layers=[] and would delete the stored draft
+   * while the restore prompt is still open (refresh mid-prompt would
+   * permanently lose the draft). Opens once the prompt is answered, or
+   * immediately when no usable draft exists. */
+  const restoreResolvedRef = useRef(false)
 
   useEffect(() => {
     if (restoreCheckedRef.current) return
     restoreCheckedRef.current = true
+    /* Ephemeral session: leave restoreResolvedRef false too — the autosave
+     * effect below never arms, so nothing is written either. */
+    if (!persistDraft) return
+    /* Open autosave AND reclaim video clips no longer owned by the restored
+     * canvas — closes every orphan vector (File→New, Clear, crash, declined
+     * restore). Keyed to the final layer set so a clip the canvas still uses is
+     * never dropped. Skipped only when localStorage itself is unreachable
+     * (below), where the draft can't be trusted — don't nuke on a transient. */
+    const resolve = (finalLayers) => { restoreResolvedRef.current = true; gcClips(finalLayers) }
     let raw
-    try { raw = localStorage.getItem(DRAFT_KEY) } catch { return }
-    if (!raw) return
+    try { raw = localStorage.getItem(DRAFT_KEY) } catch { restoreResolvedRef.current = true; return }
+    if (!raw) { resolve(layersRef.current); return }
     let draft
     try { draft = JSON.parse(raw) } catch {
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+      resolve(layersRef.current)
       return
     }
     if (!draft || !Array.isArray(draft.layers) || draft.layers.length === 0) {
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+      resolve(layersRef.current)
       return
     }
     ;(async () => {
@@ -1322,15 +1684,23 @@ export function ComposeStateProvider({ children }) {
           if (draft.paint.stroke !== undefined) setPaintStroke(draft.paint.stroke)
           if (draft.paint.active === 'fill' || draft.paint.active === 'stroke') setActivePaint(draft.paint.active)
         }
-        setLayers(draft.layers)
+        /* Re-mint uploaded-video objectURLs from the clipStore side-channel
+         * (keyed by layer id) before the layers mount — library/CDN videos and
+         * non-video layers pass through untouched. Awaited so there's no
+         * dead-blob flash. */
+        const restoredLayers = await hydrateVideoClips(normalizeLayersDeep(draft.layers))   /* legacy filterId drafts → chain */
+        setLayers(restoredLayers)
         setSelectedIds([])
+        resolve(restoredLayers)
       } else {
         try { localStorage.removeItem(DRAFT_KEY) } catch { /* ignore */ }
+        resolve(layersRef.current)
       }
     })()
   }, [modal])
 
   useEffect(() => {
+    if (!restoreResolvedRef.current) return
     const t = setTimeout(() => {
       try {
         if (layers.length === 0) {
@@ -1351,21 +1721,106 @@ export function ComposeStateProvider({ children }) {
     return () => clearTimeout(t)
   }, [layers, aspect, canvasW, canvasH, showGrid, showRulers, guides, canvasFill, canvasFillOpacity, infiniteFill, poolId, modeId, colors, locks, paintFill, paintStroke, activePaint])
 
-  /* Move a layer so it ends up at array position `toIndex` post-move. */
+  /* Move a layer so it ends up at position `toIndex` post-move among its
+   * SIBLINGS — nested layers z-reorder within their parent's children
+   * (crossing containers is reparentLayer's job). Bool parents refit
+   * through patchLayerDeep — reordering bool children legitimately changes
+   * order-dependent results (subtract). Position-unchanged moves return
+   * the input list untouched, so no history entry. */
   const moveLayer = useCallback((id, toIndex) => {
     setLayersTracked((prev) => {
-      const fromIndex = prev.findIndex((l) => l.id === id)
-      if (fromIndex < 0) return prev
-      const next = [...prev]
-      const [moved] = next.splice(fromIndex, 1)
+      const found = locateLayer(prev, id)
+      if (!found) return prev
+      const siblings = found.parent ? (found.parent.children ?? []) : prev
+      const next = [...siblings]
+      next.splice(found.index, 1)
       const clamped = Math.max(0, Math.min(next.length, toIndex))
-      if (clamped === fromIndex) return prev
-      next.splice(clamped, 0, moved)
-      return next
+      if (clamped === found.index) return prev
+      next.splice(clamped, 0, found.layer)
+      return found.parent
+        ? patchLayerDeep(prev, found.parent.id, { children: next })
+        : next
     })
   }, [setLayersTracked])
 
-  const value = {
+  /* ─── Palette actions ───
+   * Hoisted out of the context value (they were inline closures) and wrapped
+   * in useCallback so the value memo below holds: without stable identities,
+   * every provider render minted a fresh value object and re-rendered every
+   * useComposeState consumer. Behavior unchanged. */
+  const setPoolIdWithReset = useCallback((id) => {
+    setPoolId(id)
+    setColors(poolFor(id).defaults)
+    setLocks(FREE_FLAGS)
+    setEdited(FREE_FLAGS)
+    setHasRandomized(false)
+  }, [])
+
+  const setModeIdWithReset = useCallback((id) => {
+    setModeId(id)
+    if (!poolFor(poolId).isSeed) {
+      setColors(generateFor(poolId, id, colors, FREE_FLAGS))
+      setLocks(FREE_FLAGS)
+      setEdited(FREE_FLAGS)
+    }
+  }, [poolId, colors])
+
+  const toggleLock = useCallback((idx) => {
+    setLocks((prev) => prev.map((v, i) => (i === idx ? !v : v)))
+  }, [])
+
+  const setColorAt = useCallback((idx, hex) => {
+    setColors((prev) => prev.map((v, i) => (i === idx ? hex : v)))
+    if (!(isSeedSeeding && idx === 0)) {
+      setEdited((prev) => prev.map((v, i) => (i === idx ? true : v)))
+    }
+  }, [isSeedSeeding])
+
+  const randomize = useCallback(() => {
+    const generated = generateFor(poolId, modeId, colors, locks)
+    const unlockedIdx = generated.map((_, i) => i).filter((i) => !locks[i])
+    const unlockedValues = unlockedIdx.map((i) => generated[i])
+    for (let i = unlockedValues.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[unlockedValues[i], unlockedValues[j]] = [unlockedValues[j], unlockedValues[i]]
+    }
+    const next = [...generated]
+    unlockedIdx.forEach((pos, k) => { next[pos] = unlockedValues[k] })
+    setColors(next)
+    setEdited((prev) => prev.map((v, i) => (locks[i] ? v : false)))
+    if (isSeedPool) setHasRandomized(true)
+  }, [poolId, modeId, colors, locks, isSeedPool])
+
+  const reset = useCallback(() => {
+    setLocks(FREE_FLAGS)
+    setColors(poolFor(poolId).defaults)
+    setEdited(FREE_FLAGS)
+    setHasRandomized(false)
+  }, [poolId])
+
+  const toggleBg = useCallback(() => setBgOn((v) => !v), [])
+
+  /* Load a saved palette spec into the live palette. Used by the topbar
+   * "open library item" menu and PaletteInspector "Apply saved" button. */
+  const loadPalette = useCallback((item) => {
+    if (!item) return
+    if (item.poolId) setPoolId(item.poolId)
+    if (item.modeId) setModeId(item.modeId)
+    if (Array.isArray(item.colors)) setColors(item.colors)
+    if (typeof item.bgEnabled === 'boolean') setBgOn(item.bgEnabled)
+    setLocks(FREE_FLAGS)
+    setEdited(FREE_FLAGS)
+    setHasRandomized(false)
+  }, [])
+
+  const canUndo = past.length > 0
+  const canRedo = future.length > 0
+
+  /* Context value — memoized so a provider render only mints a new object
+   * when something a consumer can observe actually changed (every function
+   * above is useCallback-stable; the rest are state / derived primitives).
+   * Raw useState setters are identity-stable and stay out of the deps. */
+  const value = useMemo(() => ({
     /* selection */
     selectedId, selectedIds, select, selectCanvas, toggleSelection, selectMany,
 
@@ -1396,76 +1851,42 @@ export function ComposeStateProvider({ children }) {
     /* palette */
     poolId, modeId, colors, locks, edited, bgOn, isSeedPool, isSeedSeeding,
     palette,
-    setPoolId: (id) => {
-      setPoolId(id)
-      setColors(poolFor(id).defaults)
-      setLocks(FREE_FLAGS)
-      setEdited(FREE_FLAGS)
-      setHasRandomized(false)
-    },
-    setModeId: (id) => {
-      setModeId(id)
-      if (!poolFor(poolId).isSeed) {
-        setColors(generateFor(poolId, id, colors, FREE_FLAGS))
-        setLocks(FREE_FLAGS)
-        setEdited(FREE_FLAGS)
-      }
-    },
-    toggleLock: (idx) => setLocks((prev) => prev.map((v, i) => (i === idx ? !v : v))),
-    setColorAt: (idx, hex) => {
-      setColors((prev) => prev.map((v, i) => (i === idx ? hex : v)))
-      if (!(isSeedSeeding && idx === 0)) {
-        setEdited((prev) => prev.map((v, i) => (i === idx ? true : v)))
-      }
-    },
-    randomize: () => {
-      const generated = generateFor(poolId, modeId, colors, locks)
-      const unlockedIdx = generated.map((_, i) => i).filter((i) => !locks[i])
-      const unlockedValues = unlockedIdx.map((i) => generated[i])
-      for (let i = unlockedValues.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1))
-        ;[unlockedValues[i], unlockedValues[j]] = [unlockedValues[j], unlockedValues[i]]
-      }
-      const next = [...generated]
-      unlockedIdx.forEach((pos, k) => { next[pos] = unlockedValues[k] })
-      setColors(next)
-      setEdited((prev) => prev.map((v, i) => (locks[i] ? v : false)))
-      if (isSeedPool) setHasRandomized(true)
-    },
-    reset: () => {
-      setLocks(FREE_FLAGS)
-      setColors(poolFor(poolId).defaults)
-      setEdited(FREE_FLAGS)
-      setHasRandomized(false)
-    },
-    toggleBg: () => setBgOn((v) => !v),
-    /* Load a saved palette spec into the live palette. Used by the topbar
-     * "open library item" menu and PaletteInspector "Apply saved" button. */
-    loadPalette: (item) => {
-      if (!item) return
-      if (item.poolId) setPoolId(item.poolId)
-      if (item.modeId) setModeId(item.modeId)
-      if (Array.isArray(item.colors)) setColors(item.colors)
-      if (typeof item.bgEnabled === 'boolean') setBgOn(item.bgEnabled)
-      setLocks(FREE_FLAGS)
-      setEdited(FREE_FLAGS)
-      setHasRandomized(false)
-    },
+    setPoolId: setPoolIdWithReset,
+    setModeId: setModeIdWithReset,
+    toggleLock, setColorAt, randomize, reset, toggleBg, loadPalette,
 
     /* layers */
     layers,
     addLayer, removeLayer, updateLayer, toggleLayer, toggleLayerLock, moveLayer, duplicateLayer, clearLayers, deleteSelected,
+    /* filter chain (labs post-FX chain — per-layer effect stack) */
+    addFilter, removeFilter, toggleFilter, moveFilter, patchFilter, replaceFilter,
     /* booleanSelected kept as an alias — existing call sites now wrap
      * non-destructively; switch them to booleanGroup at leisure. */
     flipLayer, flipSelected, booleanGroup, booleanSelected: booleanGroup, flattenSelected, convertShapeToPath,
-    groupLayers, ungroupLayer, releaseBoolean, reparentLayer, alignSelected, flattenPattern, flattenText, addFlattenedFromFrame, loadPreset, insertFromLibrary,
+    groupLayers, ungroupLayer, releaseBoolean, reparentLayer, alignSelected, flattenPattern, flattenText, flattenParatype, addFlattenedFromFrame, loadPreset, insertFromLibrary,
 
     /* history */
-    canUndo: past.length > 0,
-    canRedo: future.length > 0,
+    canUndo,
+    canRedo,
     undo, redo,
     beginTransaction, commitTransaction,
-  }
+  }), [
+    selectedId, selectedIds, select, selectCanvas, toggleSelection, selectMany,
+    snapEnabled, toggleSnap,
+    currentPresetId, currentPresetName,
+    aspect, setAspect, canvasW, canvasH, canvasRatio, setCanvasSize,
+    showGrid, toggleGrid, showRulers, toggleRulers, guides, view,
+    canvasFill, canvasFillOpacity, infiniteFill,
+    activePaint, paintFill, paintStroke,
+    poolId, modeId, colors, locks, edited, bgOn, isSeedPool, isSeedSeeding, palette,
+    setPoolIdWithReset, setModeIdWithReset, toggleLock, setColorAt, randomize, reset, toggleBg, loadPalette,
+    layers,
+    addLayer, removeLayer, updateLayer, toggleLayer, toggleLayerLock, moveLayer, duplicateLayer, clearLayers, deleteSelected,
+    addFilter, removeFilter, toggleFilter, moveFilter, patchFilter, replaceFilter,
+    flipLayer, flipSelected, booleanGroup, flattenSelected, convertShapeToPath,
+    groupLayers, ungroupLayer, releaseBoolean, reparentLayer, alignSelected, flattenPattern, flattenText, flattenParatype, addFlattenedFromFrame, loadPreset, insertFromLibrary,
+    canUndo, canRedo, undo, redo, beginTransaction, commitTransaction,
+  ])
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>
 }

@@ -11,8 +11,9 @@ import { loadFont } from './fontLoader'
 import { applyCase } from './cuts'
 import { pickCutFor, seedFromBlend } from './axisRandom'
 import { curveBlend } from './curveMath'
-
-const lerp = (a, b, t) => a * (1 - t) + b * t
+/* Path-command serializers shared with the kinetic morph engine (identical
+ * copies unified — morph.js is the export). */
+import { commandsToPath, commandsMatch, lerpCommands, commandsBbox } from '../../../kinetic/morph.js'
 
 const ASPECT_MAP = { '1:1': 1, '4:5': 4 / 5, '9:16': 9 / 16 }
 const VIRTUAL_W  = 1080
@@ -20,58 +21,6 @@ const VIRTUAL_W  = 1080
 function aspectToWH(aspect, customRatio) {
   const ratio = aspect === 'custom' ? (customRatio || 1) : (ASPECT_MAP[aspect] ?? 1)
   return { w: VIRTUAL_W, h: Math.round(VIRTUAL_W / ratio) }
-}
-
-function commandsToPath(cmds) {
-  const out = []
-  for (const c of cmds) {
-    switch (c.type) {
-      case 'M': out.push(`M${c.x.toFixed(2)} ${c.y.toFixed(2)}`); break
-      case 'L': out.push(`L${c.x.toFixed(2)} ${c.y.toFixed(2)}`); break
-      case 'C': out.push(`C${c.x1.toFixed(2)} ${c.y1.toFixed(2)} ${c.x2.toFixed(2)} ${c.y2.toFixed(2)} ${c.x.toFixed(2)} ${c.y.toFixed(2)}`); break
-      case 'Q': out.push(`Q${c.x1.toFixed(2)} ${c.y1.toFixed(2)} ${c.x.toFixed(2)} ${c.y.toFixed(2)}`); break
-      case 'Z': out.push('Z'); break
-      default:  break
-    }
-  }
-  return out.join('')
-}
-
-function commandsMatch(a, b) {
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i].type !== b[i].type) return false
-  return true
-}
-
-/* Approximate bounding box from a path's command list. Walks every numeric
- * coordinate (control points included). Slightly overestimates curve extents
- * — exact curve hulls would extend beyond control points only on extreme
- * curves, which doesn't matter at glyph trim resolution. */
-function commandsBbox(commands) {
-  let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
-  for (const c of commands) {
-    for (const k of ['x', 'x1', 'x2']) {
-      if (k in c) { x1 = Math.min(x1, c[k]); x2 = Math.max(x2, c[k]) }
-    }
-    for (const k of ['y', 'y1', 'y2']) {
-      if (k in c) { y1 = Math.min(y1, c[k]); y2 = Math.max(y2, c[k]) }
-    }
-  }
-  return x1 === Infinity ? { x1: 0, y1: 0, x2: 0, y2: 0 } : { x1, y1, x2, y2 }
-}
-
-function lerpCommands(a, b, t) {
-  return a.map((ca, i) => {
-    const cb = b[i]
-    const out = { type: ca.type }
-    if ('x'  in ca && 'x'  in cb) out.x  = lerp(ca.x,  cb.x,  t)
-    if ('y'  in ca && 'y'  in cb) out.y  = lerp(ca.y,  cb.y,  t)
-    if ('x1' in ca && 'x1' in cb) out.x1 = lerp(ca.x1, cb.x1, t)
-    if ('y1' in ca && 'y1' in cb) out.y1 = lerp(ca.y1, cb.y1, t)
-    if ('x2' in ca && 'x2' in cb) out.x2 = lerp(ca.x2, cb.x2, t)
-    if ('y2' in ca && 'y2' in cb) out.y2 = lerp(ca.y2, cb.y2, t)
-    return out
-  })
 }
 
 function escapeXml(s) {
@@ -106,84 +55,116 @@ async function fontsForFrame(frame) {
 
 /**
  * Compute per-glyph paths + positions for a single text frame. Returns the
- * raw glyph data (path + x position + advance per character) plus the
- * frame-level alignment offset and translate. Used by `buildFrameSvg` for
- * full-frame rendering and by compose's `flattenText` to produce one shape
- * layer per glyph.
+ * raw glyph data (path + frame-local x/y position + advance per character)
+ * plus the frame translate. Used by `buildFrameSvg` for full-frame rendering
+ * and by compose's `flattenText` to produce one shape layer per glyph.
+ *
+ * Layout mirrors the live render (TypeFrame / TypeBlock) with the same math
+ * as textOutline.js — hard \n line breaks, letter-spacing in em after every
+ * glyph (CSS behavior), per-line alignment over frame.w, baselines via the
+ * CSS half-leading model over the primary cut's hhea metrics. It stays
+ * per-glyph here (textOutline draws whole lines) because the axis modes
+ * need a path per character. Lab frames carry no `h` (auto-height div) so
+ * the block top-anchors; compose layers flex-center within layer.h. Each
+ * line's alignment is folded into its glyphs' `x`; `offset` stays in the
+ * return shape (always 0 now) for flattenText's `offset + g.x`.
  */
 export async function computeFrameGlyphs(frame) {
-  const display = applyCase(frame.text, frame.case)
-  const chars   = Array.from(display).filter((ch) => ch !== '\n')
-  if (chars.length === 0) {
+  const display  = applyCase(frame.text, frame.case)
+  const drawable = Array.from(display).filter((ch) => ch !== '\n').length
+  if (drawable === 0) {
     return { glyphs: [], totalW: 0, offset: 0, tx: frame.x, ty: frame.y }
   }
 
   const { a, b } = await fontsForFrame(frame)
-  const size  = frame.size
-  const mode  = frame.axisMode ?? 'morph'
-  const denom = Math.max(1, chars.length - 1)
+  const size    = frame.size
+  const mode    = frame.axisMode ?? 'morph'
+  const trackPx = (frame.tracking ?? -0.01) * size
+  const denom   = Math.max(1, drawable - 1)
+
+  /* Line metrics — textOutline.js's half-leading model. */
+  const emScale = size / a.unitsPerEm
+  const ascent  = a.ascender * emScale
+  const descent = -a.descender * emScale         /* hhea descender is negative */
+  const lineH   = (frame.lineHeight ?? 1.05) * size
+  const lines   = display.split('\n')
+  const blockH  = Math.max(lines.length * lineH, size)   /* min-height: 1em */
+  const top     = ((frame.h ?? blockH) - blockH) / 2
 
   const glyphs = []
-  let x = 0
+  let totalW = 0
+  let gi = 0   /* index over raw chars incl. \n — the live random mode indexes these */
+  let mi = 0   /* index over drawable chars — the live morph distributes blend over these */
 
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i]
-    const t  = i / denom
+  for (let li = 0; li < lines.length; li++) {
+    const chars = Array.from(lines[li])
+    const baseY = top + li * lineH + (lineH - (ascent + descent)) / 2 + ascent
+    const lineGlyphs = []
+    let x = 0
 
-    let d
-    let advance
-    let bbox
+    for (const ch of chars) {
+      const t = mi / denom
 
-    if (frame.axisOn && mode === 'morph') {
-      const bl = curveBlend(t, frame.axisCurve ?? 'flat', frame.blend, frame.curveCp1 ?? { x: 0.33, y: 0.33 }, frame.curveCp2 ?? { x: 0.66, y: 0.66 })
-      const pA = a.getPath(ch, 0, 0, size)
-      const pB = b.getPath(ch, 0, 0, size)
-      const lerped = commandsMatch(pA.commands, pB.commands)
-        ? lerpCommands(pA.commands, pB.commands, bl)
-        : (bl < 0.5 ? pA : pB).commands
-      d    = commandsToPath(lerped)
-      bbox = commandsBbox(lerped)
-      const advA = a.charToGlyph(ch).advanceWidth * (size / a.unitsPerEm)
-      const advB = b.charToGlyph(ch).advanceWidth * (size / b.unitsPerEm)
-      advance = advA * (1 - bl) + advB * bl
-    } else if (frame.axisOn && mode === 'random') {
-      const seed = seedFromBlend(frame.blend)
-      const [w, wt] = pickCutFor(i, seed, {
-        widthLock:  frame.randomWidthLock,
-        weightLock: frame.randomWeightLock,
-      })
-      const font = await loadFont(w, wt, frame.italic)
-      const path = font.getPath(ch, 0, 0, size)
-      d       = path.toPathData(2)
-      bbox    = path.getBoundingBox()
-      advance = font.charToGlyph(ch).advanceWidth * (size / font.unitsPerEm)
-    } else {
-      /* No axis (or fade — snapshot the primary cut for static export). */
-      const path = a.getPath(ch, 0, 0, size)
-      d       = path.toPathData(2)
-      bbox    = path.getBoundingBox()
-      advance = a.charToGlyph(ch).advanceWidth * (size / a.unitsPerEm)
+      let d
+      let advance
+      let bbox
+
+      if (frame.axisOn && mode === 'morph') {
+        const bl = curveBlend(t, frame.axisCurve ?? 'flat', frame.blend, frame.curveCp1 ?? { x: 0.33, y: 0.33 }, frame.curveCp2 ?? { x: 0.66, y: 0.66 })
+        const pA = a.getPath(ch, 0, 0, size)
+        const pB = b.getPath(ch, 0, 0, size)
+        const lerped = commandsMatch(pA.commands, pB.commands)
+          ? lerpCommands(pA.commands, pB.commands, bl)
+          : (bl < 0.5 ? pA : pB).commands
+        d    = commandsToPath(lerped)
+        bbox = commandsBbox(lerped)
+        const advA = a.charToGlyph(ch).advanceWidth * (size / a.unitsPerEm)
+        const advB = b.charToGlyph(ch).advanceWidth * (size / b.unitsPerEm)
+        advance = advA * (1 - bl) + advB * bl + trackPx
+      } else if (frame.axisOn && mode === 'random') {
+        const seed = seedFromBlend(frame.blend)
+        const [w, wt] = pickCutFor(gi, seed, {
+          widthLock:  frame.randomWidthLock,
+          weightLock: frame.randomWeightLock,
+        })
+        const font = await loadFont(w, wt, frame.italic)
+        const path = font.getPath(ch, 0, 0, size)
+        d       = path.toPathData(2)
+        bbox    = path.getBoundingBox()
+        advance = font.charToGlyph(ch).advanceWidth * (size / font.unitsPerEm) + trackPx
+      } else {
+        /* No axis (or fade — snapshot the primary cut for static export). */
+        const path = a.getPath(ch, 0, 0, size)
+        d       = path.toPathData(2)
+        bbox    = path.getBoundingBox()
+        advance = a.charToGlyph(ch).advanceWidth * (size / a.unitsPerEm) + trackPx
+      }
+
+      lineGlyphs.push({ ch, d, x, y: baseY, advance, bbox })
+      x += advance
+      gi += 1
+      mi += 1
     }
+    gi += 1   /* the \n consumed between lines */
 
-    glyphs.push({ ch, d, x, advance, bbox })
-    x += advance
+    /* Trailing whitespace hangs (pre-wrap) — excluded from the measured
+     * line width, like textOutline's measure(). */
+    let lineW = x
+    for (let j = lineGlyphs.length - 1; j >= 0 && /\s/.test(lineGlyphs[j].ch); j--) lineW -= lineGlyphs[j].advance
+    const lx = alignOffset(frame.textAlign ?? 'center', frame.w, lineW)
+    for (const g of lineGlyphs) g.x += lx
+    glyphs.push(...lineGlyphs)
+    totalW = Math.max(totalW, lineW)
   }
 
-  const totalW = x
-  const offset = alignOffset(frame.textAlign ?? 'center', frame.w, totalW)
-  /* Glyphs are drawn baseline-relative (paths extend up from y=0). Translate
-   * the group down by `size` so the cap-line sits roughly at frame.y. */
-  const tx = frame.x + offset
-  const ty = frame.y + size
-
-  return { glyphs, totalW, offset, tx, ty }
+  return { glyphs, totalW, offset: 0, tx: frame.x, ty: frame.y }
 }
 
 export async function buildFrameSvg(frame) {
   const { glyphs, tx, ty } = await computeFrameGlyphs(frame)
   if (glyphs.length === 0) return ''
   return `<g transform="translate(${tx.toFixed(2)} ${ty.toFixed(2)})" fill="${frame.color}" fill-rule="evenodd">
-${glyphs.filter((g) => g.d).map((g) => `  <path d="${g.d}" transform="translate(${g.x.toFixed(2)} 0)"/>`).join('\n')}
+${glyphs.filter((g) => g.d).map((g) => `  <path d="${g.d}" transform="translate(${g.x.toFixed(2)} ${g.y.toFixed(2)})"/>`).join('\n')}
 </g>`
 }
 
@@ -198,16 +179,4 @@ export async function buildTypeCompositionSvg(state) {
 ${bg}
 ${groups.join('\n')}
 </svg>`
-}
-
-export function downloadSvg(svgString, filename = 'composition.svg') {
-  const blob = new Blob([svgString], { type: 'image/svg+xml' })
-  const url  = URL.createObjectURL(blob)
-  const a    = document.createElement('a')
-  a.href     = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
 }

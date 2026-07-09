@@ -15,12 +15,7 @@
 import { ASPECTS } from '../shell/aspects'
 import { CANVAS_VIRTUAL_W } from '../shell/Canvas'
 import { buildLayersSvg } from '../compose/build'
-
-function rgbToHex(r, g, b) {
-  return '#' + [r, g, b]
-    .map((n) => n.toString(16).padStart(2, '0').toUpperCase())
-    .join('')
-}
+import { rgbToHex } from './cssVar'
 
 /* Resolve aspect string to virtual canvas dimensions. */
 function aspectToWH(aspect, customRatio) {

@@ -6,6 +6,8 @@
  * filter no category claims lands in 'Other' so future filters never vanish
  * from the picker.
  */
+import { filterById } from '../../../filters'
+
 const CATEGORIES = [
   { id: 'halftone',   label: 'Halftone',   filterIds: ['fx-ascii', 'fx-halftone-dither', 'fx-bitmap'] },
   { id: 'scanline',   label: 'Scanline',   filterIds: ['scanline'] },
@@ -20,10 +22,25 @@ const CATEGORIES = [
 
 const CLAIMED = new Set(CATEGORIES.flatMap((c) => c.filterIds))
 
+/* Pixi GPU tier (kind:'pixi') buckets — keyed on the def's own `group` field
+ * (labs effect groups) so new pixi filters slot in without editing this list.
+ * Labs' one Displacement effect folds into Distortion. */
+const PIXI_GROUPS = [
+  { id: 'color-adjustments', label: 'Color Adjustments' },
+  { id: 'blur-sharpen',      label: 'Blur & Sharpen' },
+  { id: 'distortion',        label: 'Distortion' },
+  { id: 'artistic',          label: 'Artistic' },
+  { id: 'lighting',          label: 'Lighting' },
+  { id: 'stylize',           label: 'Stylize' },
+  { id: 'utility',           label: 'Utility' },
+]
+const pixiCatId = (group) => `pixi-${group}`
+
 /**
  * Ordered categories resolved against a filter list (the layer's allowed
- * catalog): [{ id, label, filters: FilterDef[] }]. Unclaimed filters get an
- * 'Other' bucket; empty categories drop out.
+ * catalog): [{ id, label, filters: FilterDef[] }]. Canvas/GL categories first
+ * (hardcoded filterIds), then the pixi group buckets; unclaimed non-pixi
+ * filters get an 'Other' bucket; empty categories drop out.
  */
 export function effectCategories(filters) {
   const cats = CATEGORIES.map((c) => ({
@@ -31,14 +48,23 @@ export function effectCategories(filters) {
     label: c.label,
     filters: c.filterIds.map((id) => filters.find((f) => f.id === id)).filter(Boolean),
   }))
-  cats.push({ id: 'other', label: 'Other', filters: filters.filter((f) => !CLAIMED.has(f.id)) })
+  for (const g of PIXI_GROUPS) {
+    const fs = filters.filter((f) => f.kind === 'pixi' && f.group === g.id)
+    if (fs.length) cats.push({ id: pixiCatId(g.id), label: g.label, filters: fs })
+  }
+  cats.push({ id: 'other', label: 'Other', filters: filters.filter((f) => f.kind !== 'pixi' && !CLAIMED.has(f.id)) })
   return cats.filter((c) => c.filters.length > 0)
 }
 
-/** Category id owning a filter id ('other' for unclaimed; null for none). */
+/** Category id owning a filter id ('other' for unclaimed; null for none).
+ * Pixi defs resolve to their `pixi-<group>` bucket (matches effectCategories). */
 export function categoryOf(filterId) {
   if (!filterId) return null
-  return CATEGORIES.find((c) => c.filterIds.includes(filterId))?.id ?? 'other'
+  const hard = CATEGORIES.find((c) => c.filterIds.includes(filterId))
+  if (hard) return hard.id
+  const def = filterById(filterId)
+  if (def?.kind === 'pixi' && def.group) return pixiCatId(def.group)
+  return 'other'
 }
 
 /* The filter param that IS the filter's preset list (hierarchy level 4 —
@@ -55,3 +81,12 @@ const PRESET_PARAM = {
   'gl-lens':            'type',
 }
 export const presetParamOf = (filterId) => PRESET_PARAM[filterId] ?? null
+
+/** The full params patch a preset pick applies: the preset key itself plus
+ * any per-value recipe the filter def carries (`presetPatches` — glass ships
+ * the labs registry's full look-configs; defs without one patch just the
+ * preset key, the old single-key behavior). */
+export const presetPatchFor = (def, value) => ({
+  [presetParamOf(def.id)]: value,
+  ...(def.presetPatches?.[value] ?? {}),
+})

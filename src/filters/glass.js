@@ -16,14 +16,11 @@
  *   pulse — shift amplitude breathes on one sine cycle (labs sin(t·3) → sin(TAU·u)).
  */
 
+import { buffersFor, intHash2 as hash2 } from './fxCore.js'
+
 const TAU = Math.PI * 2
 
 /* ── deterministic value noise (frosted "Glass" + shard patterns) ────── */
-function hash2(x, y) {
-  let h = (x | 0) * 374761393 + (y | 0) * 668265263
-  h = (h ^ (h >> 13)) * 1274126177
-  return ((h ^ (h >> 16)) >>> 0) / 4294967295
-}
 const fade = (t) => t * t * (3 - 2 * t)
 function vnoise(x, y) {
   const xi = Math.floor(x), yi = Math.floor(y)
@@ -127,6 +124,30 @@ const PATTERNS = [
 ]
 const PATTERN_OPTIONS = PATTERNS.map((p) => ({ value: p.id, label: p.label }))
 
+/* Full-look recipes (labs glass/registry.js PRESETS) keyed by the pattern the
+ * editor's Preset dropdown picks — a pick applies the whole labs recipe via
+ * presetPatchFor, not just the pattern key. Baked-dispersion patterns
+ * (slivers/prismatic/prism-ripple) carry their source preset's numbers with
+ * chroma left to the bake (dispersion: field above); slivers' density is also
+ * baked, so its scale stays at the field's tuning rather than labs' scale 3.
+ * Labs 'Kaleidoscope' (shards + mirror fold) has no pattern of its own here —
+ * one recipe per pattern — so it isn't representable and is dropped. */
+const PRESET_PATCHES = {
+  panes:          { xShift: 60, yShift: 0, scale: 1.5, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  slivers:        { xShift: 22, yShift: 80, scale: 1.5, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  bands:          { xShift: 80, yShift: 24, scale: 1.2, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  glass:          { xShift: 40, yShift: 40, scale: 1.2, angle: 0, chroma: 0, mix: 100, edge: 'mirror', mirror: false },
+  prismatic:      { xShift: 50, yShift: 50, scale: 1.6, angle: 0, chroma: 0, mix: 100, edge: 'mirror', mirror: false },
+  ripple:         { xShift: 42, yShift: 42, scale: 1, angle: 0, chroma: 25, mix: 100, edge: 'mirror', mirror: false },
+  'prism-ripple': { xShift: 55, yShift: 55, scale: 1.4, angle: 0, chroma: 0, mix: 100, edge: 'mirror', mirror: false },
+  waves:          { xShift: 30, yShift: 55, scale: 1, angle: 0, chroma: 20, mix: 100, edge: 'mirror', mirror: false },
+  diagonal:       { xShift: 70, yShift: 10, scale: 1.5, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  shards:         { xShift: 60, yShift: 60, scale: 1.3, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  grid:           { xShift: 50, yShift: 50, scale: 1.6, angle: 0, chroma: 0, mix: 100, edge: 'clamp', mirror: false },
+  lens:           { xShift: 85, yShift: 85, scale: 1, angle: 0, chroma: 45, mix: 100, edge: 'clamp', mirror: false },
+  swirl:          { xShift: 60, yShift: 60, scale: 1.2, angle: 0, chroma: 30, mix: 100, edge: 'mirror', mirror: false },
+}
+
 /* Edge handling for an out-of-bounds sample coordinate. */
 function edgeAt(v, n, mode) {
   if (v >= 0 && v < n) return v | 0
@@ -138,20 +159,9 @@ function edgeAt(v, n, mode) {
   return v < 0 ? 0 : n - 1 // clamp
 }
 
-/* Per-source pixel cache. The host hands us a NEW fitted canvas whenever the
- * source image / fit / size changes, so canvas identity is the cache key:
- * base pixels are read once per source, the output ImageData is reused every
- * frame (no per-frame getImageData / allocation). */
-const pixelCache = new WeakMap()
-function pixelsFor(src) {
-  let e = pixelCache.get(src)
-  if (!e) {
-    const g = src.getContext('2d')
-    e = { base: g.getImageData(0, 0, src.width, src.height), out: g.createImageData(src.width, src.height) }
-    pixelCache.set(src, e)
-  }
-  return e
-}
+/* Per-source pixel cache — fxCore's shared buffersFor (canvas identity is the
+ * key: base pixels read once per source, the output ImageData reused every
+ * frame, no per-frame getImageData / allocation). */
 
 /* Shared blit canvas — putImageData ignores the dest ctx's dpr transform, so
  * we compose into this scratch and drawImage it (transform-aware) instead. */
@@ -170,7 +180,7 @@ function scratchFor(w, h) {
  * would go black otherwise). */
 function displace(src, q) {
   const w = src.width, h = src.height
-  const { base, out } = pixelsFor(src)
+  const { base, out } = buffersFor(src)
   const sd = base.data
   const od = out.data
 
@@ -241,6 +251,7 @@ export default {
   id: 'glass',
   label: 'Glass',
   animated: true,
+  presetPatches: PRESET_PATCHES,
   params: [
     { key: 'pattern', label: 'Pattern', type: 'select', options: PATTERN_OPTIONS, default: 'panes' },
     { key: 'xShift', label: 'X shift', type: 'range', min: -100, max: 100, step: 1, default: 60 },

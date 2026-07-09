@@ -10,7 +10,7 @@ import { createContext, useContext, useState } from 'react'
  * user immediately gets normal selection gestures on the freshly-created
  * layer.
  */
-export const TOOLS = ['select', 'text', 'pen', 'rect', 'ellipse', 'triangle', 'line', 'polygon', 'star', 'pattern', 'zoom']
+export const TOOLS = ['select', 'text', 'pen', 'rect', 'ellipse', 'triangle', 'line', 'polygon', 'star', 'pattern', 'zoom', 'orbit']
 
 export const TOOL_META = {
   select:   { id: 'select',   label: 'Select',     icon: 'tool-cursor',   shortcut: 'V' },
@@ -26,6 +26,10 @@ export const TOOL_META = {
   /* Zoom is a viewport tool, not a create tool — click zooms in at the
    * pointer, Alt+click zooms out. Never commits a layer. */
   zoom:     { id: 'zoom',     label: 'Zoom',       icon: 'zoom',          shortcut: 'Z' },
+  /* Orbit is a viewport tool for 3D layers — drag over a 3D-capable layer
+   * (math 3D, Soft Forms 3D, GL scenes) rotates its camera, wheel zooms.
+   * Layer move/marquee is off in this mode, so orbit never fights a drag. */
+  orbit:    { id: 'orbit',    label: 'Orbit',      icon: 'camera',        shortcut: 'C' },
 }
 
 const ToolContext = createContext(null)

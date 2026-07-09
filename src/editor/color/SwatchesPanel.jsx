@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Dropdown } from '@kolkrabbi/kol-component'
 import { ColorSwatch } from '@kolkrabbi/kol-component'
-import { resolveCssVar } from '../../components/sections/ColorRamp'
+import { resolveCssVar } from './cssVar'
 
 /**
  * SwatchesPanel — AC brand-token swatch picker.

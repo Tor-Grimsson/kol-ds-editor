@@ -21,6 +21,10 @@ export const harmonyById = (id) => HARMONIES.find((h) => h.id === id) ?? HARMONI
 
 const norm = (h) => ((h % 360) + 360) % 360
 
+/* Marker outline — white for contrast against the fully-saturated ring hues
+ * (theme-independent: the wheel's colours, not the surface, sit behind it). */
+const MARKER_STROKE = '#FFFFFF'
+
 /**
  * HarmonyWheel — canvas hue ring with a draggable base-hue handle and
  * satellite markers at the active harmony's scheme hues.
@@ -87,7 +91,7 @@ export default function HarmonyWheel({ size = 248, hue, harmony, onHueChange }) 
       ctx.arc(x, y, 5, 0, Math.PI * 2)
       ctx.fillStyle = `hsl(${h}, 100%, 50%)`
       ctx.fill()
-      ctx.strokeStyle = '#FFFFFF'
+      ctx.strokeStyle = MARKER_STROKE
       ctx.lineWidth = 1.5
       ctx.stroke()
     }
@@ -100,7 +104,7 @@ export default function HarmonyWheel({ size = 248, hue, harmony, onHueChange }) 
     ctx.arc(bx, by, 9, 0, Math.PI * 2)
     ctx.fillStyle = `hsl(${baseHue}, 100%, 50%)`
     ctx.fill()
-    ctx.strokeStyle = '#FFFFFF'
+    ctx.strokeStyle = MARKER_STROKE
     ctx.lineWidth = 2
     ctx.stroke()
     ctx.beginPath()

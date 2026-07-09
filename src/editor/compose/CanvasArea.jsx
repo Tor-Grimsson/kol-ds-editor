@@ -6,13 +6,17 @@ import SelectionOverlay from './SelectionOverlay'
 import PathNodeOverlay from './PathNodeOverlay'
 import { pathD, normalizePath, normalizePathRings, rotatePathNodes, scalePathNodes, dist } from './path-math'
 import { scaleBoolChildren } from './boolean-ops'
+import { findLayerDeep } from './helpers'
 import CropOverlay from './CropOverlay'
+import KineticElementOverlay from './KineticElementOverlay'
+import SoftformsHandleOverlay from './SoftformsHandleOverlay'
 import { matchAny } from '../state/keymap'
 import { useTool } from '../state/tools'
 import { useColorTarget } from '../color/useColorTarget'
 import { useLayerEdit } from './useLayerEdit'
 import { computeSnapTargets, findSnap } from './snap'
 import { transport } from '../params/transport'
+import { saveClip } from '../lib/clipStore'
 
 /* Per-tool cursor on the canvas stage. Using system cursors directly —
  * `crosshair` for shape-creation tools (Photoshop/Figma convention),
@@ -49,6 +53,10 @@ const CURSOR_FOR_TOOL = {
  *   • Escape       — deselect
  */
 const SOCIAL_ASPECTS = ['1:1', '4:5', '9:16']
+
+/* Snap-guide lines — deliberate magenta accent (Figma convention), NOT a
+ * theme token: it must pop against any canvas fill in either theme. */
+const SNAP_GUIDE_COLOR = '#FF00C8'
 
 /* hex (#RRGGBB) + alpha (0..1) → rgba() string. Used to apply canvas fill
  * opacity at render time without storing alpha in the color value. */
@@ -167,6 +175,11 @@ export default function CanvasArea() {
    * actively snapping to a target. Cleared on pointerup. */
   const [snapGuides, setSnapGuides] = useState(null)
 
+  /* Group-move drags (mousedown on a member of a multi-selection) record
+   * here whether the pointer actually moved past the dead zone — mouseup
+   * without movement is a click, which collapses to single-select. */
+  const groupMovedRef = useRef(false)
+
   /* Line tool — pen-style placement. First click sets P1; second click
    * commits a line layer between P1 and P2. linePreview tracks the cursor
    * for the preview line that follows between clicks. Esc cancels.
@@ -192,6 +205,18 @@ export default function CanvasArea() {
    * double-clicking a photo; exited on Escape / Enter / deselect. */
   const [cropId, setCropId] = useState(null)
 
+  /* Kinetic element-edit mode — { id, index } of the kinetic layer whose
+   * elements are being edited on canvas. Entered from KineticPanel's
+   * "Edit on canvas" (kol:kinetic-edit, a toggle); exited on Escape / Enter
+   * (inside the overlay) / deselect / tool switch. */
+  const [kineticEdit, setKineticEdit] = useState(null)
+
+  /* Soft Forms on-canvas form-edit mode — { id, index } of the softforms
+   * (2D) layer whose SDF forms are edited on canvas. Entered from
+   * SoftformsLayers' "Edit forms on canvas" (kol:softform-edit, a toggle);
+   * exited on Escape / Enter / deselect / tool switch (kinetic precedent). */
+  const [softformsEdit, setSoftformsEdit] = useState(null)
+
   /* Enter crop on a photo. First entry initializes the crop window
    * {imgX,imgY,imgW,imgH} (frame-local px) from the layer's current fit —
    * visually a no-op, it just makes the implicit object-fit rect explicit
@@ -200,19 +225,28 @@ export default function CanvasArea() {
   const enterCrop = useCallback((layer) => {
     select(layer.id)
     if (layer.imgW != null) { setCropId(layer.id); return }
-    const img = new Image()
-    img.onload = () => {
-      if (!img.naturalWidth || !img.naturalHeight) return
+    const init = (iw0, ih0) => {
+      if (!iw0 || !ih0) return
       const fitK = layer.fit === 'contain' ? Math.min : Math.max
-      const k  = fitK(layer.w / img.naturalWidth, layer.h / img.naturalHeight)
-      const iw = img.naturalWidth * k
-      const ih = img.naturalHeight * k
+      const k  = fitK(layer.w / iw0, layer.h / ih0)
+      const iw = iw0 * k
+      const ih = ih0 * k
       updateLayer(layer.id, {
         imgX: (layer.w - iw) / 2, imgY: (layer.h - ih) / 2,
         imgW: iw, imgH: ih,
       })
       setCropId(layer.id)
     }
+    /* Video has no naturalWidth — read intrinsic size off a detached
+       <video> once metadata loads (same fit math as the image path). */
+    if (layer.srcType === 'video') {
+      const v = document.createElement('video')
+      v.onloadedmetadata = () => init(v.videoWidth, v.videoHeight)
+      v.src = layer.src
+      return
+    }
+    const img = new Image()
+    img.onload = () => init(img.naturalWidth, img.naturalHeight)
     img.src = layer.src
   }, [select, updateLayer])
 
@@ -252,11 +286,53 @@ export default function CanvasArea() {
     }
   }, [])
 
+  /* OS file drop → a new photo layer at the drop point. Reuses the File-tab
+   * upload semantics: an objectURL blob src + srcType (image | video), created
+   * through the shared addLayer('photo') path (not a bespoke insert). Video
+   * clips are persisted via clipStore (keyed by the returned layer id) so a
+   * dropped clip survives reload, exactly like the "Upload video" button; a
+   * dropped image's objectURL is session-only (no image side-channel). The
+   * layer box is sized to the media's intrinsic aspect (probed off the same
+   * objectURL), fit within ~60% of the frame, centered on the drop and clamped
+   * inside it. */
+  const addDroppedFile = useCallback((file, clientX, clientY) => {
+    const isVideo = file.type.startsWith('video/')
+    const isImage = file.type.startsWith('image/')
+    if (!isVideo && !isImage) return
+    const url = URL.createObjectURL(file)
+    const at = clientToVirtual(clientX, clientY)
+    const place = (iw, ih) => {
+      const MAX = Math.min(CANVAS_W, viewH) * 0.6
+      let w = iw || 480
+      let h = ih || 480
+      const k = Math.min(1, MAX / Math.max(w, h))
+      w = Math.max(8, Math.round(w * k))
+      h = Math.max(8, Math.round(h * k))
+      const x = Math.max(0, Math.min(CANVAS_W - w, at.vx - w / 2))
+      const y = Math.max(0, Math.min(viewH - h, at.vy - h / 2))
+      const id = addLayer('photo', { src: url, srcType: isVideo ? 'video' : 'image', fit: 'cover', x, y, w, h })
+      if (isVideo && id) saveClip(id, file)
+    }
+    if (isVideo) {
+      const v = document.createElement('video')
+      v.onloadedmetadata = () => place(v.videoWidth, v.videoHeight)
+      v.onerror = () => place(0, 0)
+      v.src = url
+    } else {
+      const img = new Image()
+      img.onload = () => place(img.naturalWidth, img.naturalHeight)
+      img.onerror = () => place(0, 0)
+      img.src = url
+    }
+  }, [addLayer, clientToVirtual, viewH])
+
   const onStageMouseDown = useCallback((e) => {
     if (e.button !== 0) return
     /* Zoom tool is handled on the OUTER wrapper (covers the backdrop too) —
-     * never create/select from the stage while it's armed. */
-    if (tool === 'zoom') return
+     * never create/select from the stage while it's armed. Orbit is a 3D
+     * viewport mode — the per-layer camera rig (LayerRenderer) owns the
+     * pointer over 3D layers; the stage does nothing (no move/create). */
+    if (tool === 'zoom' || tool === 'orbit') return
     /* Prevent the document-level click-away listener from clobbering this
      * canvas selection. */
     e.nativeEvent.stopPropagation()
@@ -395,6 +471,36 @@ export default function CanvasArea() {
           toggleSelection(id)
           return
         }
+        /* Mousedown on an already-selected member of a multi-selection
+         * KEEPS the selection and arms a group move — every selected
+         * unlocked positioned layer rides the same delta, one transaction
+         * → one undo entry. Collapse-to-single-select happens on mouseup
+         * only when no drag occurred (see onUp). Canvas selection means
+         * "everything" — keep its collapse-to-single click as-is. */
+        const multiIds = selectedIds.filter((sid) => sid !== 'canvas')
+        if (
+          !selectedIds.includes('canvas') &&
+          multiIds.length > 1 && multiIds.includes(id) &&
+          !COVER_TYPES.includes(layer.type)
+        ) {
+          e.preventDefault()
+          const items = multiIds
+            .map((sid) => layers.find((l) => l.id === sid))
+            /* Locked members stay put; cover / unbounded layers have no
+             * position to move (same filters as the single-move path). */
+            .filter((l) => l && !l.locked && !COVER_TYPES.includes(l.type)
+              && typeof l.x === 'number' && typeof l.y === 'number')
+            .map((l) => ({ id: l.id, startBox: { x: l.x, y: l.y } }))
+          beginTransaction()
+          groupMovedRef.current = false
+          setDrag({
+            mode: 'move',
+            layerId: id,
+            items,
+            startX: e.clientX, startY: e.clientY,
+          })
+          return
+        }
         select(id)
         if (!COVER_TYPES.includes(layer.type)) {
           e.preventDefault()
@@ -421,7 +527,7 @@ export default function CanvasArea() {
       startVX: vx, startVY: vy,
       vx, vy, vw: 0, vh: 0,
     })
-  }, [tool, layers, selectedLayer, select, toggleSelection, beginTransaction, clientToVirtual, getScale, finishPath, linePlacement, addLayer, setTool])
+  }, [tool, layers, selectedLayer, selectedIds, select, toggleSelection, beginTransaction, clientToVirtual, getScale, finishPath, linePlacement, addLayer, setTool])
 
   /* Window listeners while dragging. */
   useEffect(() => {
@@ -454,6 +560,20 @@ export default function CanvasArea() {
       const { startBox, mode, layerId } = drag
 
       if (mode === 'move') {
+        /* Group move — every member gets the same delta. No snapping (the
+         * selection would snap to its own members). A ~3 screen px dead
+         * zone (pen-tool precedent) keeps a click-jitter from counting as
+         * a drag, so mouseup can still collapse the selection. */
+        if (drag.items) {
+          if (!groupMovedRef.current) {
+            if (Math.abs(e.clientX - drag.startX) < 3 && Math.abs(e.clientY - drag.startY) < 3) return
+            groupMovedRef.current = true
+          }
+          for (const it of drag.items) {
+            updateLayer(it.id, { x: it.startBox.x + dx, y: it.startBox.y + dy })
+          }
+          return
+        }
         const cand = { x: startBox.x + dx, y: startBox.y + dy, w: startBox.w, h: startBox.h }
         if (!snapEnabled) {
           updateLayer(layerId, { x: cand.x, y: cand.y })
@@ -475,23 +595,32 @@ export default function CanvasArea() {
       const rsin = Math.sin(rotRad)
       const ldx = rotRad ? dx * rcos + dy * rsin : dx
       const ldy = rotRad ? -dx * rsin + dy * rcos : dy
-      if (dir.includes('E')) w = Math.max(8, startBox.w + ldx)
-      if (dir.includes('S')) h = Math.max(8, startBox.h + ldy)
+      /* ⌥/Alt = resize from CENTER: the dragged edge and its opposite both
+       * move, so each edge delta counts double; the center is pinned below.
+       * Familiar Figma/Illustrator modifier, read live off the move event. */
+      const fromCenter = e.altKey
+      const m = fromCenter ? 2 : 1
+      if (dir.includes('E')) w = Math.max(8, startBox.w + m * ldx)
+      if (dir.includes('S')) h = Math.max(8, startBox.h + m * ldy)
       if (dir.includes('W')) {
-        const nw = Math.max(8, startBox.w - ldx)
+        const nw = Math.max(8, startBox.w - m * ldx)
         x = startBox.x + (startBox.w - nw)
         w = nw
       }
       if (dir.includes('N')) {
-        const nh = Math.max(8, startBox.h - ldy)
+        const nh = Math.max(8, startBox.h - m * ldy)
         y = startBox.y + (startBox.h - nh)
         h = nh
       }
-      /* Aspect lock — constrain w/h to the snapshot ratio. Corners pick
-       * the driving axis by larger absolute change; edges drive on their
-       * own axis. When N/W edges are involved, x/y get re-anchored so the
-       * far corner stays put. */
-      const ar = startBox.aspectLocked
+      /* Aspect constrain — the inspector's aspect lock (a stored ratio) OR
+       * Shift held during the drag. Shift INVERTS the lock (Figma): locked +
+       * Shift resizes free, unlocked + Shift constrains to the box's start
+       * ratio. Corners pick the driving axis by larger absolute change; edges
+       * drive on their own axis. When N/W edges are involved, x/y get
+       * re-anchored so the far corner stays put. */
+      const lockedAr = Number.isFinite(startBox.aspectLocked) && startBox.aspectLocked > 0 ? startBox.aspectLocked : null
+      const constrain = lockedAr ? !e.shiftKey : e.shiftKey
+      const ar = constrain ? (lockedAr ?? (startBox.w / startBox.h)) : null
       if (Number.isFinite(ar) && ar > 0) {
         const isCorner = dir.length === 2
         const driveW = isCorner
@@ -505,10 +634,16 @@ export default function CanvasArea() {
           if (dir.includes('W')) x = startBox.x + startBox.w - w
         }
       }
-      /* Rotated resize: the unrotated x/y math above drifts because the
-       * center moves. Re-derive x/y so the point OPPOSITE the dragged
-       * handle stays fixed in world space (Figma behavior). */
-      if (rotRad) {
+      if (fromCenter) {
+        /* Center pinned — overrides the edge/corner anchoring above (and the
+         * rotated re-derivation below); rotation-invariant since the center
+         * itself never moves. */
+        x = startBox.x + startBox.w / 2 - w / 2
+        y = startBox.y + startBox.h / 2 - h / 2
+      } else if (rotRad) {
+        /* Rotated resize: the unrotated x/y math above drifts because the
+         * center moves. Re-derive x/y so the point OPPOSITE the dragged
+         * handle stays fixed in world space (Figma behavior). */
         const ax = dir.includes('E') ? -1 : dir.includes('W') ? 1 : 0
         const ay = dir.includes('S') ? -1 : dir.includes('N') ? 1 : 0
         const cx0 = startBox.x + startBox.w / 2
@@ -557,6 +692,10 @@ export default function CanvasArea() {
         return
       }
       commitTransaction()
+      /* Group-move mousedown that never dragged = a plain click on a
+       * member — collapse the multi-selection to that layer. After the
+       * commit so the selection change doesn't ride the history entry. */
+      if (drag.mode === 'move' && drag.items && !groupMovedRef.current) select(drag.layerId)
       setDrag(null)
       setSnapGuides(null)
     }
@@ -569,7 +708,7 @@ export default function CanvasArea() {
     // commitCreateDrag is closed over below; re-include via deps would force
     // the listener to rebind every render. Stable enough for v1.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drag, updateLayer, commitTransaction, clientToVirtual, getScale])
+  }, [drag, updateLayer, commitTransaction, select, clientToVirtual, getScale])
 
   /* Pen-tool live preview — tracks the cursor between the two clicks so
    * the user sees a dashed preview line snapping with their pointer. */
@@ -674,13 +813,64 @@ export default function CanvasArea() {
   useEffect(() => {
     if (cropId && !selectedIds.includes(cropId)) setCropId(null)
   }, [cropId, selectedIds])
+  useEffect(() => {
+    if (kineticEdit && !selectedIds.includes(kineticEdit.id)) setKineticEdit(null)
+  }, [kineticEdit, selectedIds])
+  useEffect(() => {
+    if (softformsEdit && !selectedIds.includes(softformsEdit.id)) setSoftformsEdit(null)
+  }, [softformsEdit, selectedIds])
+
+  /* Switching to any create/draw tool exits crop / node-edit / kinetic
+   * element-edit — otherwise the mode overlay's full-frame surface
+   * (pointerEvents: auto) swallows the create mousedown and dragging a shape
+   * pans/moves the mode target instead. Keyed on `tool` alone so entering a
+   * mode never bounces straight back out. */
+  useEffect(() => {
+    if (tool === 'select' || tool === 'zoom') return
+    setCropId(null)
+    setNodeEditId(null)
+    setKineticEdit(null)
+    setSoftformsEdit(null)
+  }, [tool])
+
+  /* KineticPanel's "Edit on canvas" routes here (the kol:enter-crop idiom) —
+   * CanvasArea owns element-edit mode state. Same-layer dispatch toggles the
+   * mode off; a different kinetic layer switches the mode over. */
+  useEffect(() => {
+    const onKineticEdit = (e) => {
+      const { id, index } = e.detail || {}
+      if (kineticEdit?.id === id) { setKineticEdit(null); return }
+      const layer = layers.find((l) => l.id === id && l.type === 'kinetic' && !l.locked)
+      if (!layer) return
+      select(id)
+      setKineticEdit({ id, index: index ?? 0 })
+    }
+    window.addEventListener('kol:kinetic-edit', onKineticEdit)
+    return () => window.removeEventListener('kol:kinetic-edit', onKineticEdit)
+  }, [layers, kineticEdit, select])
+
+  /* SoftformsLayers' "Edit forms on canvas" routes here (same idiom as
+   * kol:kinetic-edit) — CanvasArea owns form-edit mode state. Same-layer
+   * dispatch toggles it off; a different softforms layer switches it over.
+   * 2D only — the 3D loop uses its orbit-camera drag, not SDF handles. */
+  useEffect(() => {
+    const onSoftformEdit = (e) => {
+      const { id, index } = e.detail || {}
+      if (softformsEdit?.id === id) { setSoftformsEdit(null); return }
+      const layer = layers.find((l) => l.id === id && l.type === 'loop' && l.loopId === 'softforms' && !l.locked)
+      if (!layer) return
+      select(id)
+      setSoftformsEdit({ id, index: index ?? 0 })
+    }
+    window.addEventListener('kol:softform-edit', onSoftformEdit)
+    return () => window.removeEventListener('kol:softform-edit', onSoftformEdit)
+  }, [layers, softformsEdit, select])
 
   /* Inspector's crop button routes here (same CustomEvent idiom as
    * kol:show-shortcuts) — CanvasArea owns crop-mode state. */
   useEffect(() => {
     const onCropEvent = (e) => {
-      /* Video sources excluded — crop math assumes a still. */
-      const layer = layers.find((l) => l.id === e.detail && l.type === 'photo' && l.srcType !== 'video' && !l.locked)
+      const layer = layers.find((l) => l.id === e.detail && l.type === 'photo' && !l.locked)
       if (layer) enterCrop(layer)
     }
     window.addEventListener('kol:enter-crop', onCropEvent)
@@ -721,7 +911,7 @@ export default function CanvasArea() {
     if (layer?.type === 'path') {
       e.preventDefault()
       enterNodeEdit(layer)
-    } else if (layer?.type === 'photo' && layer.srcType !== 'video' && !layer.locked) {
+    } else if (layer?.type === 'photo' && !layer.locked) {
       e.preventDefault()
       enterCrop(layer)
     }
@@ -746,6 +936,14 @@ export default function CanvasArea() {
 
   const cropLayer = cropId
     ? (layers.find((l) => l.id === cropId && l.type === 'photo' && l.imgW != null) ?? null)
+    : null
+
+  const kineticEditLayer = kineticEdit
+    ? (layers.find((l) => l.id === kineticEdit.id && l.type === 'kinetic') ?? null)
+    : null
+
+  const softformsEditLayer = softformsEdit
+    ? (layers.find((l) => l.id === softformsEdit.id && l.type === 'loop' && l.loopId === 'softforms') ?? null)
     : null
 
   /* Commit a marquee-drag — find every layer whose AABB intersects the
@@ -868,7 +1066,7 @@ export default function CanvasArea() {
       /* Layer opacity digits (Photoshop convention): 1-9 = 10-90%, 0 = 100%,
        * 0 twice within 500ms = 0%. Handled before keymap matching — combos
        * can't express ranges or the double-tap chord. */
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-9]$/.test(e.key) && selectedLayer) {
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-9]$/.test(e.key) && selectedLayer && !selectedLayer.locked) {
         e.preventDefault()
         const digit = Number(e.key)
         const now = performance.now()
@@ -899,13 +1097,24 @@ export default function CanvasArea() {
         case 'deselect':
           return
 
-        case 'duplicate':   if (layer) { e.preventDefault(); duplicateLayer(layer.id) }; return
+        case 'duplicate':   if (layer && !layer.locked) { e.preventDefault(); duplicateLayer(layer.id) }; return
 
         case 'delete-back':
         case 'delete-fwd': {
-          if (layerOnlyIds().length === 0) return
+          /* Canvas selection implicitly includes every top-level layer —
+           * deleting here would nuke the whole composition. Same guard as
+           * the inspector's trash button. */
+          if (selectedIds.includes('canvas')) return
+          /* Locked layers survive a keyboard delete. Deep lookup so a
+           * locked group child is protected too. */
+          const ids = layerOnlyIds()
+          const deletable = ids.filter((id) => !findLayerDeep(layers, id)?.locked)
+          if (deletable.length === 0) return
           e.preventDefault()
-          deleteSelected()
+          if (deletable.length === ids.length) { deleteSelected(); return }
+          beginTransaction()
+          deletable.forEach(removeLayer)
+          commitTransaction()
           return
         }
 
@@ -939,7 +1148,7 @@ export default function CanvasArea() {
         case 'nudge-right-10':
         case 'nudge-up-10':
         case 'nudge-down-10': {
-          if (!layer || !isPositionedSel) return
+          if (!layer || !isPositionedSel || layer.locked) return
           e.preventDefault()
           const step = shortcut.id.endsWith('-10') ? 10 : 1
           const axis = shortcut.id.includes('left') ? [-1, 0]
@@ -968,6 +1177,7 @@ export default function CanvasArea() {
         case 'tool-ellipse': e.preventDefault(); setTool('ellipse'); return
         case 'tool-pattern': e.preventDefault(); setTool('pattern'); return
         case 'tool-zoom':    e.preventDefault(); setTool('zoom');    return
+        case 'tool-orbit':   e.preventDefault(); setTool('orbit');   return
 
         /* Color shortcuts always fire — no selection-dependent gates.
          * SwatchStack is canonical app-level state; writes propagate to
@@ -1007,7 +1217,7 @@ export default function CanvasArea() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [
-    selectedLayer, selectedIds, isPositionedSel,
+    selectedLayer, selectedIds, isPositionedSel, layers,
     select, removeLayer, deleteSelected, updateLayer, nudgeEdit, duplicateLayer, toggleLayer, toggleLayerLock,
     flipSelected, enterNodeEdit,
     groupLayers, ungroupLayer,
@@ -1082,30 +1292,43 @@ export default function CanvasArea() {
           onMouseDown={onStageMouseDown}
           onDoubleClick={onStageDoubleClick}
           onDragOver={(e) => {
-            if (e.dataTransfer.types.includes('application/x-kol-library')) {
+            /* Accept both the app's own library drags AND native OS file drags
+             * (types includes 'Files'). */
+            const types = e.dataTransfer.types
+            if (types.includes('application/x-kol-library') || types.includes('Files')) {
               e.preventDefault()
               e.dataTransfer.dropEffect = 'copy'
             }
           }}
           onDrop={(e) => {
+            /* Internal library payload wins — the app's own drag. */
             const raw = e.dataTransfer.getData('application/x-kol-library')
-            if (!raw) return
+            if (raw) {
+              e.preventDefault()
+              try {
+                const { slot, item } = JSON.parse(raw)
+                const at = clientToVirtual(e.clientX, e.clientY)
+                insertFromLibrary(slot, item, at)
+              } catch { /* malformed payload: ignore */ }
+              return
+            }
+            /* Native OS file drop → a photo layer at the drop point. Read files
+             * + coords synchronously (the event is recycled after handling). */
+            const file = e.dataTransfer.files && [...e.dataTransfer.files]
+              .find((f) => f.type.startsWith('image/') || f.type.startsWith('video/'))
+            if (!file) return
             e.preventDefault()
-            try {
-              const { slot, item } = JSON.parse(raw)
-              const at = clientToVirtual(e.clientX, e.clientY)
-              insertFromLibrary(slot, item, at)
-            } catch { /* malformed payload: ignore */ }
+            addDroppedFile(file, e.clientX, e.clientY)
           }}
         >
           {visibleLayers.map((layer) => (
             <LayerRenderer key={layer.id} layer={layer} palette={palette} />
           ))}
           {selectedPositionedLayers.map((l) => (
-            /* The path being node-edited / photo being cropped swaps its box
-             * chrome for the mode overlay; paths never get resize handles
-             * (edit via nodes). */
-            nodeEditId === l.id || cropId === l.id ? null : (
+            /* The path being node-edited / photo being cropped / kinetic
+             * layer in element-edit swaps its box chrome for the mode
+             * overlay; paths never get resize handles (edit via nodes). */
+            nodeEditId === l.id || cropId === l.id || kineticEdit?.id === l.id || softformsEdit?.id === l.id ? null : (
               <SelectionOverlay
                 key={l.id}
                 layer={l}
@@ -1123,6 +1346,27 @@ export default function CanvasArea() {
               beginTransaction={beginTransaction}
               commitTransaction={commitTransaction}
               onExit={() => setCropId(null)}
+            />
+          )}
+          {kineticEditLayer && (
+            <KineticElementOverlay
+              layer={kineticEditLayer}
+              initialIndex={kineticEdit.index}
+              toVirtual={clientToVirtual}
+              updateLayer={updateLayer}
+              beginTransaction={beginTransaction}
+              commitTransaction={commitTransaction}
+              onExit={() => setKineticEdit(null)}
+            />
+          )}
+          {softformsEditLayer && (
+            <SoftformsHandleOverlay
+              layer={softformsEditLayer}
+              toVirtual={clientToVirtual}
+              updateLayer={updateLayer}
+              beginTransaction={beginTransaction}
+              commitTransaction={commitTransaction}
+              onExit={() => setSoftformsEdit(null)}
             />
           )}
           {nodeEditLayer && (
@@ -1214,7 +1458,7 @@ export default function CanvasArea() {
                 position: 'absolute',
                 left: snapGuides.h, top: 0,
                 width: 1, height: '100%',
-                background: '#FF00C8',
+                background: SNAP_GUIDE_COLOR,
                 pointerEvents: 'none',
               }}
             />
@@ -1225,7 +1469,7 @@ export default function CanvasArea() {
                 position: 'absolute',
                 left: 0, top: snapGuides.v,
                 width: '100%', height: 1,
-                background: '#FF00C8',
+                background: SNAP_GUIDE_COLOR,
                 pointerEvents: 'none',
               }}
             />

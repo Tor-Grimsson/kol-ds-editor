@@ -14,10 +14,30 @@
  *   through a shared scratch canvas + drawImage (transform-aware).
  */
 
-export const AMOUNT_PARAM = { key: 'amount', label: 'Amount', type: 'range', min: 0, max: 100, step: 1, default: 100 }
+/* noRandom: Amount is the dry/wet mix dial, not a look param — the seeded
+ * filter Randomize must not thrash the user's blend. */
+export const AMOUNT_PARAM = { key: 'amount', label: 'Amount', type: 'range', min: 0, max: 100, step: 1, default: 100, noRandom: true }
+
+/* ── per-source cache registry ──────────────────────────────────────────
+ * Every filter-side cache keyed on src-canvas identity (base pixels, luma
+ * grids, samplers) registers its WeakMap here so invalidateSource() can drop
+ * a source whose PIXELS changed under a stable identity — chain intermediates
+ * (each stage rewrites the same canvas every frame) and in-place-redrawn loop
+ * sources. Fresh-identity sources (fitted photo rebuilds) never need it. */
+const sourceCaches = new Set()
+export function registerSourceCache(cache) {
+  sourceCaches.add(cache)
+}
+export function invalidateSource(src) {
+  for (const c of sourceCaches) c.delete(src)
+}
 
 const bufferCache = new WeakMap()
-function buffersFor(src) {
+registerSourceCache(bufferCache)
+/* Shared per-source ImageData cache, keyed on src-canvas identity — base
+ * pixels read once per source, the out buffer reused every frame. Also used
+ * by glass.js (displacement) and fxHalftoneDither.js (base pixels only). */
+export function buffersFor(src) {
   let e = bufferCache.get(src)
   if (!e) {
     const g = src.getContext('2d')
@@ -25,6 +45,20 @@ function buffersFor(src) {
     bufferCache.set(src, e)
   }
   return e
+}
+
+/* ── shared deterministic 2D hashes (the two variants used across filters) ──
+ * sinHash2 — the labs sin-lattice hash (vnoise/cellRand in the HALFTONE trio
+ * + sweeps). intHash2 — the integer-mix hash (glass fields, fx-noise). */
+export function sinHash2(x, y) {
+  const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453
+  return s - Math.floor(s)
+}
+
+export function intHash2(x, y) {
+  let h = (x | 0) * 374761393 + (y | 0) * 668265263
+  h = (h ^ (h >> 13)) * 1274126177
+  return ((h ^ (h >> 16)) >>> 0) / 4294967295
 }
 
 let scratch = null
@@ -46,6 +80,48 @@ export function mixSourceOver(ctx, src, w, h, amount) {
   ctx.globalAlpha = 1 - amt
   ctx.drawImage(src, 0, 0, w, h)
   ctx.restore()
+}
+
+/* ── chain runner ───────────────────────────────────────────────────────
+ * Ordered stack of canvas filters, output of one feeding the next — the labs
+ * applyCanvasFx loop (useCanvasFx.js:296-329) reshaped for the filter
+ * contract: each stage is a full `def.apply(ctx, src, w, h, p, u)` pass, so
+ * draw-based filters (the HALFTONE trio) chain exactly like buffer filters.
+ *
+ * `stages` = [{ def, params }] ENABLED canvas stages in chain order. The
+ * final stage draws into `ctx` (the layer canvas, dpr-transformed); earlier
+ * stages render into pooled intermediates at the source's own backing size —
+ * the dpr-scaled source contract holds through the whole chain (each
+ * intermediate is backed at src pixels, its ctx transformed so 1 unit =
+ * 1 CSS px). Intermediates are invalidated after every write so identity-
+ * keyed pixel caches re-read them. */
+const interPool = []
+function interFor(i, bw, bh) {
+  let c = interPool[i]
+  if (!c) { c = document.createElement('canvas'); interPool[i] = c }
+  if (c.width !== bw) c.width = bw
+  if (c.height !== bh) c.height = bh
+  return c
+}
+
+export function runChain(ctx, src, w, h, stages, u) {
+  const n = stages.length
+  if (n === 0) { ctx.drawImage(src, 0, 0, w, h); return }
+  let cur = src
+  for (let i = 0; i < n; i++) {
+    const { def, params } = stages[i]
+    if (i === n - 1) {
+      def.apply(ctx, cur, w, h, params, u)
+      return
+    }
+    const inter = interFor(i, cur.width, cur.height)
+    const g = inter.getContext('2d')
+    g.setTransform(inter.width / w, 0, 0, inter.height / h, 0, 0)
+    g.clearRect(0, 0, w, h)
+    def.apply(g, cur, w, h, params, u)
+    invalidateSource(inter)
+    cur = inter
+  }
 }
 
 export function runFx(ctx, src, w, h, processor, params, amount) {

@@ -1,17 +1,19 @@
 // Library entry — the embeddable editor package (@kolkrabbi/design-editor).
 // The standalone app boots from main.jsx instead; this file is ONLY the
 // npm/library surface. Nothing in the app imports it.
-import './index.css'
-import { MemoryRouter } from 'react-router-dom'
+//
+// CSS: index.lib.css, NOT the app's index.css — the app sheet ships Tailwind
+// preflight + framework page chrome, which would restyle the HOST page when
+// the built dist/design-editor.css is imported. The lib sheet scopes its
+// resets under .kol-design-editor (the root class stamped below).
+import './index.lib.css'
+import { useEffect } from 'react'
 import Editor from './editor/Editor'
 import { setMediaProxyBase } from './editor/library/mediaLibrary'
+import { applyThemeMode, getThemeMode, hasStoredThemeMode } from './editor/theme'
 
 /**
  * <DesignEditor /> — the whole editor as one embeddable component.
- *
- * Wrapped in a MemoryRouter so the editor's internal navigation never touches
- * the host app's URL bar (a BrowserRouter would). The host mounts this
- * anywhere; the editor owns no route of its own.
  *
  * @param {object}  props
  * @param {string} [props.mediaProxyBase='/media/'] same-origin path the host
@@ -24,10 +26,19 @@ export function DesignEditor({ mediaProxyBase } = {}) {
   // ponytail: module-global config knob, set at render — idempotent, runs
   // before children mount. A context/prop-drill would be pure ceremony here.
   if (mediaProxyBase != null) setMediaProxyBase(mediaProxyBase)
+
+  // Apply the persisted theme choice on mount (the app does this pre-paint in
+  // index.html; embeds have no boot script). Without it, Settings → Theme
+  // shows the stored mode as selected while it isn't in effect. A fresh embed
+  // (nothing stored) keeps the host's data-theme untouched.
+  useEffect(() => {
+    if (hasStoredThemeMode()) applyThemeMode(getThemeMode())
+  }, [])
+
   return (
-    <MemoryRouter>
+    <div className="kol-design-editor">
       <Editor />
-    </MemoryRouter>
+    </div>
   )
 }
 

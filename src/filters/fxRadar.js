@@ -249,7 +249,9 @@ export const RADAR_FX = [
     ],
     apply(ctx, src, w, h, p, u) {
       const amp = 1 + (p.wobble ?? 0) * Math.sin(TAU * u)
-      runFx(ctx, src, w, h, fxChromatic, { offsetX: (p.offsetX ?? 5) * amp, offsetY: (p.offsetY ?? 0) * amp }, p.amount)
+      /* channel offsets in css px → source-pixel space (k = 1 at dpr 1). */
+      const k = src.width / w || 1
+      runFx(ctx, src, w, h, fxChromatic, { offsetX: (p.offsetX ?? 5) * amp * k, offsetY: (p.offsetY ?? 0) * amp * k }, p.amount)
     },
   },
   {

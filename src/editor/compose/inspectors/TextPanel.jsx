@@ -6,7 +6,6 @@ import { TEXT_SCHEMA } from '../../params/schemas/text'
 import { WIDTHS, WEIGHTS, CASES } from '../../modes/type/cuts'
 import { useComposeState, resolveColor } from '../state'
 import { findLayerDeep } from '../helpers'
-import { labelForLayer } from '../labels'
 import { useLayerEdit } from '../useLayerEdit'
 import { useGeneratorLibrary } from '../../library/LibraryProvider'
 
@@ -57,11 +56,7 @@ export default function TextPanel() {
 
   return (
     <div className="kol-compose-rail kol-compose-rail--inspector">
-      {/* min-h matches InspectorRail's header so tab switches never shift
-          the column. */}
-      <div className="flex items-center gap-3 px-4 min-h-[46px]">
-        {text && <span className="kol-helper-12 text-emphasis">{labelForLayer(text)}</span>}
-      </div>
+      {/* Header (title + delete) is shared in SelectionPalettePanel. */}
       <div className="kol-compose-inspector-body">
         {text
           ? <TextSurface key={text.id} layer={text} />

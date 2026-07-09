@@ -13,7 +13,7 @@
  * Architecture: docs/kol-migration/locked/color-system.md
  */
 
-import { resolveCssVar } from '../../../components/sections/ColorRamp'
+import { resolveCssVar } from '../../color/cssVar'
 
 /* Token paths per ramp — single place to edit if a ramp grows / shrinks.
  * Hue + cream ramps are the DS palette primitives (`--kol-color-{hue}-N`);

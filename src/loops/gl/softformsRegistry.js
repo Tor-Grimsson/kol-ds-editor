@@ -88,7 +88,10 @@ export const SCENES = [
       { t: 'orb', x: 0.34, y: -0.12, sx: 0.7, sy: 0.7, rot: 0, hue: 0.5 },
     ] },
   { id: 'eclipse', cat: 'cluster', label: 'Eclipse',
-    defaults: { palette: 'noir', spectral: true, sweep: 50, irid: 0.7, hue: 0.0, rim: 1.1, motion: 0.2 },
+    /* 'noir' is a LOOK id, not a GRAD_PALETTE — the noir look's recipe is
+     * palette 'spectrum' + spectral + low irid / high rim (canonically
+     * irid 0.6, rim 1.0 in the labs LOOK_PRESETS; this scene runs 0.7/1.1). */
+    defaults: { palette: 'spectrum', spectral: true, sweep: 50, irid: 0.7, hue: 0.0, rim: 1.1, motion: 0.2 },
     forms: [
       { t: 'orb', x: -0.18, y: 0.08, sx: 0.92, sy: 0.92, rot: 0, hue: 0.0 },
       { t: 'orb', x: 0.5, y: -0.2, sx: 0.55, sy: 0.55, rot: 0, hue: 0.45 },
@@ -100,41 +103,3 @@ export const DEFAULT_SCENE = 'trinity'
 
 // The scenes (presets) inside a category, in registry order.
 export const presetsForCat = (cat) => SCENES.filter((s) => s.cat === cat)
-
-// Palette / iridescence looks applied on top of any scene.
-export const LOOK_PRESETS = [
-  { id: 'spectrum', label: 'Spectrum', p: { palette: 'spectrum', spectral: true, hue: 0, irid: 1.1 } },
-  { id: 'iris', label: 'Iris', p: { palette: 'iris', spectral: false, hue: 0.1, irid: 1.05 } },
-  { id: 'aqua', label: 'Aqua', p: { palette: 'aqua', spectral: false, hue: 0.5, irid: 1.0 } },
-  { id: 'magma', label: 'Magma', p: { palette: 'magma', spectral: false, hue: 0.05, irid: 0.95 } },
-  { id: 'candy', label: 'Candy', p: { palette: 'candy', spectral: false, hue: 0.8, irid: 1.15 } },
-  { id: 'noir', label: 'Noir', p: { palette: 'spectrum', spectral: true, hue: 0, irid: 0.6, rim: 1.0 } },
-]
-
-// Baseline shading params; a scene's `defaults` override these.
-export const BASE_PARAMS = {
-  hue: 0, irid: 1.0, sweep: 20, sheen: 0.35, gloss: 32,
-  rim: 0.7, rimPow: 2.6, rimShift: 0.12, sss: 0.25,
-  bulge: 0.55, relief: 1.0, motion: 0.0, grain: 0.02,
-  spectral: true, palette: 'spectrum', backdrop: 'black',
-}
-
-// Params that animate (run through resolveDeep each frame).
-export const NUMERIC_KEYS = ['hue', 'irid', 'sweep', 'sheen', 'gloss', 'rim', 'rimPow', 'sss', 'bulge', 'relief', 'motion', 'grain']
-
-// Slider specs for the rail.
-export const CTRL_SPEC = {
-  sweep: { label: 'Sweep', min: 0, max: 360, step: 1 },
-  irid: { label: 'Iridescence', min: 0, max: 2.5, step: 0.05 },
-  hue: { label: 'Hue', min: 0, max: 1, step: 0.01 },
-  sheen: { label: 'Sheen', min: 0, max: 1.5, step: 0.02 },
-  gloss: { label: 'Gloss', min: 4, max: 90, step: 1 },
-  rim: { label: 'Rim', min: 0, max: 2, step: 0.05 },
-  rimPow: { label: 'Rim focus', min: 1, max: 6, step: 0.1 },
-  rimShift: { label: 'Rim shift', min: 0, max: 0.5, step: 0.01 },
-  sss: { label: 'Subsurface', min: 0, max: 1, step: 0.02 },
-  bulge: { label: 'Bulge', min: 0.2, max: 1.2, step: 0.02 },
-  relief: { label: 'Relief', min: 0.2, max: 2.5, step: 0.05 },
-  motion: { label: 'Motion', min: 0, max: 1.5, step: 0.05 },
-  grain: { label: 'Grain', min: 0, max: 0.12, step: 0.005 },
-}

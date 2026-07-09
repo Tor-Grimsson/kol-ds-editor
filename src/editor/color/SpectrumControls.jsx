@@ -316,7 +316,7 @@ export function WheelTriangle({ hue, sat, val, onChangeHue, onChangeSV }) {
           xmlns="http://www.w3.org/1999/xhtml"
           style={{
             width: '100%', height: '100%',
-            background: `conic-gradient(from 0deg,
+            background: `conic-gradient(from 90deg,
               hsl(0,100%,50%), hsl(60,100%,50%), hsl(120,100%,50%),
               hsl(180,100%,50%), hsl(240,100%,50%), hsl(300,100%,50%),
               hsl(360,100%,50%))`,
@@ -339,8 +339,9 @@ export function WheelTriangle({ hue, sat, val, onChangeHue, onChangeSV }) {
 
 /* ────────── Internal helpers (not exported) ────────── */
 
-/* DOM handle for HueStrip / SBSquare. Solid white-stroked circle with thin
- * black halo (matching the macOS-port look). */
+/* DOM handle for HueStrip / SBSquare. Solid fg circle with a thin halo
+ * (matching the macOS-port look) — surface-coloured gap + fg-based outline
+ * so it reads on both themes. */
 function Handle({ left, top }) {
   return (
     <span
@@ -349,7 +350,7 @@ function Handle({ left, top }) {
         left, top,
         width: 14, height: 14,
         transform: 'translate(-50%, -50%)',
-        boxShadow: '0 0 0 1px #000, 0 0 0 2px #505050',
+        boxShadow: '0 0 0 1px var(--kol-surface-primary), 0 0 0 2px var(--kol-fg-32)',
       }}
     />
   )

@@ -4,8 +4,12 @@
 // canvas2d: the labs "Viewport3D" is NOT three.js, just this projector.
 //
 // PURE IN u. What changed vs labs:
-//   • mathjs expression evaluation did NOT come along — the surface z=f(x,y) is
-//     a select over the three SURFACE_PRESETS expressions, frozen to plain JS.
+//   • The surface z=f(x,y,t) is a select over the three frozen SURFACE_PRESETS
+//     expressions PLUS 'Custom…' — a free-text expression compiled by
+//     ./mathfn.js (the hardened compileVars port). `t` runs 0→2π per loop, so
+//     any expression using integer multiples of t closes seamlessly (labs fed
+//     free seconds — that never closed). While a custom string doesn't
+//     compile, the slot keeps the last good fn (labs edit-time behavior).
 //   • resolveRate (expression-rate params) dropped — domain/height/weight are
 //     plain numbers.
 //   • Camera: a fixed yaw/pitch/dist orbit that spins `spin` whole turns per
@@ -13,6 +17,9 @@
 //   • Attractors: the full precomputed trajectory is drawn (the labs draw-in
 //     "playing" head is transport state, not a function of u). Trajectories are
 //     memoized by (attractor, steps) — pure caching, scrub-safe.
+
+import { compileSlot } from './mathfn.js'
+import { drawAxes3D, AXIS_3D_OPTIONS } from './axes.js'
 
 const TAU = Math.PI * 2
 const DEG = Math.PI / 180
@@ -24,6 +31,29 @@ export const FN_OPTIONS = [
   { value: 'saddle', label: 'Saddle', fn: (x, y) => (x * x - y * y) * 0.25 },
   { value: 'bell', label: 'Bell', fn: (x, y) => Math.cos(x) * Math.cos(y) * Math.exp(-(x * x + y * y) * 0.08) },
 ]
+
+// Labs SurfacePage EXAMPLES, verbatim — the custom-expression quick-fill list
+// (exported for any picker UI; the text param carries one as its placeholder).
+// `t` here is loop phase 0→2π, so `- t*3` = three travelling cycles per loop.
+export const SURFACE_EXPR_EXAMPLES = [
+  'sin(x*1.6)*cos(y*1.6)',
+  'sin(hypot(x,y)*3 - t*3)',
+  'cos(x)*cos(y)*exp(-(x*x+y*y)*0.08)',
+  '(x*x - y*y)*0.25',
+  'sin(x*y*0.6)',
+]
+
+// z = f(x,y,t) for the frame: frozen select fn, or the compiled custom
+// expression with t bound to the loop phase (2π·u). Slot keyed per layer so
+// two custom-surface layers don't share a last-good fn.
+function surfaceFn(p, u) {
+  if (p.fn === 'custom') {
+    const cf = compileSlot(`math-surface:${p.id ?? ''}:expr`, p.expr, ['x', 'y', 't'])
+    if (cf) { const tt = TAU * u; return (x, y) => cf(x, y, tt) }
+    return FN_OPTIONS[0].fn // never compiled yet — visible fallback, not a blank
+  }
+  return (FN_OPTIONS.find((f) => f.value === p.fn) || FN_OPTIONS[0]).fn
+}
 
 // ── Strange attractors (ported verbatim from math/attractor/data/attractors.js).
 export const ATTRACTORS = [
@@ -172,7 +202,7 @@ const lerpHex = (a, b, u) => {
 // (morph = height breathe, ripple = travelling radial wave, fade = opacity
 // breathe) run integer cycles of u — all default 0 ⇒ static render, seamless.
 function surfaceRender(ctx, proj, u, eye, p) {
-  const fn = (FN_OPTIONS.find((f) => f.value === p.fn) || FN_OPTIONS[0]).fn
+  const fn = surfaceFn(p, u)
   const R = Math.max(8, Math.round(p.res))
   const D = p.domain
   const hs = p.height * (1 + p.morph * Math.sin(TAU * u))
@@ -279,15 +309,31 @@ function surfaceRender(ctx, proj, u, eye, p) {
   if (p.fade) ctx.globalAlpha = 1
 }
 
-// Strange-attractor polyline — full trajectory; `morph` breathes the stroke
-// weight in place. Glow was already stripped in labs (shadowBlur tanked FPS).
+// Strange-attractor polyline — `morph` breathes the stroke weight in place.
+// `trace` is the labs draw-in (AttractorPage.render count ramp) recast as a
+// function of u: 'draw' reveals 0→1 over the loop with the head dot riding
+// the tip (labs verbatim — note frame(1)≠frame(0), the reveal restarts at
+// the loop point); 'cycle' is the seamless form (triangle 0→1→0, the curves
+// loop's reveal idiom). `glow` is the labs AttractorPage shadowBlur slider —
+// 0 (default) skips it entirely, it costs FPS (why labs' render.js port
+// stripped it).
 function attractorRender(ctx, proj, u, p, traj) {
   const pts = traj.pts
   if (!pts || !pts.length) return
-  const count = pts.length - 1
+  const N = pts.length
+  let count = N - 1
+  let head = false
+  if (p.trace === 'draw') {
+    count = Math.max(1, Math.floor(u * (N - 1)))
+    head = true
+  } else if (p.trace === 'cycle') {
+    count = Math.max(1, Math.round((1 - Math.abs(1 - 2 * u)) * (N - 1)))
+    head = true
+  }
   ctx.lineWidth = Math.max(0.3, p.weight * (1 + p.morph * 0.6 * Math.sin(TAU * u)))
   ctx.lineJoin = 'round'
   ctx.lineCap = 'round'
+  if (p.glow > 0) { ctx.shadowBlur = p.glow; ctx.shadowColor = p.stroke }
   if (p.fade) ctx.globalAlpha = 1 - p.fade * 0.5 * (1 - Math.cos(TAU * u))
   if (p.gradient) {
     const NBANDS = 24
@@ -314,7 +360,16 @@ function attractorRender(ctx, proj, u, p, traj) {
     }
     ctx.stroke()
   }
+  ctx.shadowBlur = 0
   if (p.fade) ctx.globalAlpha = 1
+  if (head) {
+    // Drawing head riding the tip (labs' white dot, themed to the stroke).
+    const [hx, hy] = proj(pts[count])
+    ctx.fillStyle = p.stroke
+    ctx.beginPath()
+    ctx.arc(hx, hy, Math.max(2, p.weight * 1.8), 0, TAU)
+    ctx.fill()
+  }
 }
 
 // Kind gates — surfaceRender-only vs attractorRender-only params (see draw()).
@@ -327,10 +382,16 @@ export default {
   group: 'math',
   kind: '2d',
   duration: 12,
+  /* Param-camera contract: these layer params ARE the orbit camera, so the
+   * renderer's cameraKeys drag rig (pointer → yaw/pitch, wheel → dist) can
+   * drive it when the layer's cameraDrag is on. */
+  cameraKeys: { yaw: 'yaw', pitch: 'pitch', dist: 'dist' },
   params: [
     { key: 'kind', label: 'Kind', type: 'select', options: [{ value: 'surface', label: 'Surface' }, { value: 'attractor', label: 'Attractor' }], default: 'surface' },
-    { key: 'fn', label: 'Function', type: 'select', options: FN_OPTIONS.map(({ value, label }) => ({ value, label })), default: 'ripple', when: isSurf },
+    { key: 'fn', label: 'Function', type: 'select', options: [...FN_OPTIONS.map(({ value, label }) => ({ value, label })), { value: 'custom', label: 'Custom…' }], default: 'ripple', when: isSurf },
+    { key: 'expr', label: 'z = f(x, y, t)', type: 'text', rows: 2, default: SURFACE_EXPR_EXAMPLES[0], placeholder: SURFACE_EXPR_EXAMPLES[1], when: (l) => isSurf(l) && l.fn === 'custom' },
     { key: 'attractor', label: 'Attractor', type: 'select', options: ATTRACTORS.map((a) => ({ value: a.id, label: a.label })), default: 'lorenz', when: isAtt },
+    { key: 'trace', label: 'Trace', type: 'select', options: [{ value: 'full', label: 'Full' }, { value: 'draw', label: 'Draw-in' }, { value: 'cycle', label: 'Cycle' }], default: 'full', when: isAtt },
     { key: 'mode', label: 'Mode', type: 'select', options: [{ value: 'wire', label: 'Wire' }, { value: 'fill', label: 'Fill' }], default: 'wire', when: isSurf },
     { key: 'bg', label: 'Background', type: 'color', role: 'bg', default: '#050506' },
     { key: 'low', label: 'Low', type: 'color', role: 'accent', default: '#1b2b4a', when: isSurf },
@@ -345,7 +406,11 @@ export default {
     { key: 'fade', label: 'Fade', type: 'range', min: 0, max: 1, step: 0.01, default: 0 },
     { key: 'steps', label: 'Steps', type: 'range', min: 2000, max: 12000, step: 500, default: 6000, noRandom: true, when: isAtt },
     { key: 'weight', label: 'Weight', type: 'range', min: 0.3, max: 4, step: 0.1, default: 1.1, when: (l) => isAtt(l) || (l.mode ?? 'wire') === 'wire' },
+    { key: 'glow', label: 'Glow', type: 'range', min: 0, max: 30, step: 1, default: 0, when: isAtt },
     { key: 'gradient', label: 'Rainbow', type: 'toggle', default: false, when: isAtt },
+    { key: 'axes', label: 'Axes', type: 'select', options: AXIS_3D_OPTIONS, default: 'none', section: 'Reference' },
+    { key: 'gridColor', label: 'Grid color', type: 'color', role: 'fg', default: '#ffffff', section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
+    { key: 'gridOpacity', label: 'Grid opacity', type: 'range', min: 0, max: 1, step: 0.02, default: 0.1, section: 'Reference', when: (l) => l.axes && l.axes !== 'none' },
     { key: 'spin', label: 'Spin · turns', type: 'range', min: 0, max: 3, step: 1, default: 1, tab: 'anim', section: 'Motion' },
     { key: 'yaw', label: 'Yaw', type: 'range', min: 0, max: 360, step: 1, default: 325 },
     { key: 'pitch', label: 'Pitch', type: 'range', min: -80, max: 80, step: 1, default: 26 },
@@ -363,6 +428,9 @@ export default {
     const yaw = (p.yaw + u * Math.round(p.spin) * 360) * DEG
     const eye = orbitEye(yaw, p.pitch * DEG, p.dist * ext, target)
     const proj = projector(eye, target, w, h, ext)
+
+    // Reference axes / box under the figure (labs Viewport3D + StylePanel).
+    drawAxes3D(ctx, proj, ext, { axis: p.axes, gridColor: p.gridColor, gridOpacity: p.gridOpacity })
 
     if (isAtt) attractorRender(ctx, proj, u, p, traj)
     else surfaceRender(ctx, proj, u, eye, p)

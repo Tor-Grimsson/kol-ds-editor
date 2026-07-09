@@ -19,7 +19,7 @@ Peer dependencies (install if you don't already have them):
 ```sh
 npm install react react-dom react-router-dom \
   @kolkrabbi/kol-component @kolkrabbi/kol-framework \
-  @kolkrabbi/kol-theme @kolkrabbi/kol-loader
+  @kolkrabbi/kol-theme @kolkrabbi/kol-icons
 ```
 
 ## Usage

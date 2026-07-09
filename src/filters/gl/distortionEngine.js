@@ -128,6 +128,20 @@ export default class DistortionEngine {
     this.time = 0
     this.last = performance.now()
 
+    // Cursor record/replay (labs radar/DistortPage:131-165). A recorded gesture
+    // is a normalized track [{ t: 0..1, x, y }] (uv, origin bottom-left) plus
+    // its wall duration (cursorDur, seconds). Replay steers the point along it
+    // hands-free — sampled by the transport-driven clock so it loops cleanly.
+    this.cursorPath = []       // normalized track (persisted via params)
+    this.cursorDur = 0         // recorded wall duration, seconds
+    this.cursorReplay = false  // replay the track instead of the auto path
+    this._recording = false
+    this._recBuf = null        // raw samples { t(ms), x, y } while recording
+    this._recStart = 0
+    this._onCanvasMove = null  // own-canvas pointermove listener (self-contained capture)
+    this._paramPathRef = undefined // last param-array ref adopted (per-frame clobber guard)
+    this.onCursorPath = null   // (path, dur) callback — host persists to layer params
+
     const rtOpts = {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -211,7 +225,93 @@ export default class DistortionEngine {
     if (p.motionSpeed != null) this.motion.speed = p.motionSpeed
     if (p.motionSize != null) this.motion.size = p.motionSize
     if (p.motionPulse != null) this.motion.pulse = p.motionPulse
+    // Cursor record/replay wiring.
+    if (p.cursorReplay != null) this.cursorReplay = !!p.cursorReplay
+    if (p.cursorDur != null) this.cursorDur = p.cursorDur
+    // Adopt a persisted track only when the param ARRAY REF changes (a real
+    // updateLayer), never per-frame — a fresh in-engine recording keeps the old
+    // ref, so it isn't clobbered by the stale param before the host persists it.
+    if (p.cursorPath !== undefined && p.cursorPath !== this._paramPathRef && !this._recording) {
+      this._paramPathRef = p.cursorPath
+      this.cursorPath = Array.isArray(p.cursorPath) ? p.cursorPath : []
+    }
+    // Edge-triggered record toggle — a self-contained record path (attaches a
+    // pointermove listener to the engine's own canvas). A host can drive the
+    // same via startCursorRecord/pushCursorSample/stopCursorRecord directly.
+    if (p.cursorRecord != null) {
+      if (p.cursorRecord && !this._recording) this.startCursorRecord()
+      else if (!p.cursorRecord && this._recording) this.stopCursorRecord()
+    }
     this._apply()
+  }
+
+  /** Begin capturing a cursor gesture. Clears the prior buffer + attaches a
+   * pointermove listener to this.canvas (hover, no button — doesn't fight the
+   * layer's pointerdown drag). Replay is suspended while recording. */
+  startCursorRecord() {
+    this.cursorReplay = false
+    this._recBuf = []
+    this._recStart = performance.now()
+    this._recording = true
+    if (!this._onCanvasMove && this.canvas) {
+      this._onCanvasMove = (e) => {
+        const r = this.canvas.getBoundingClientRect()
+        if (!r.width || !r.height) return
+        const x = (e.clientX - r.left) / r.width
+        const y = 1 - (e.clientY - r.top) / r.height   // GL uv origin bottom-left
+        this.pushCursorSample(Math.min(1, Math.max(0, x)), Math.min(1, Math.max(0, y)))
+      }
+      this.canvas.addEventListener('pointermove', this._onCanvasMove)
+    }
+  }
+
+  /** Feed one sample (uv 0..1, origin bottom-left) into the active recording,
+   * and steer the live point so the trail follows while you record. Public so a
+   * host can capture from a wrapper element instead of the engine canvas. */
+  pushCursorSample(x, y) {
+    if (!this._recording) return
+    this._recBuf.push({ t: performance.now() - this._recStart, x, y })
+    this.setPointer(x, y)
+  }
+
+  /** End recording. Normalizes the buffer to a 0..1 track (dropping the raw
+   * wall clock into cursorDur, seconds), fires onCursorPath for persistence,
+   * and returns the track. */
+  stopCursorRecord() {
+    if (!this._recording) return this.cursorPath
+    this._recording = false
+    if (this._onCanvasMove && this.canvas) this.canvas.removeEventListener('pointermove', this._onCanvasMove)
+    this._onCanvasMove = null
+    const buf = this._recBuf || []
+    this._recBuf = null
+    if (buf.length >= 2) {
+      const dur = buf[buf.length - 1].t || 1
+      this.cursorPath = buf.map((s) => ({ t: s.t / dur, x: s.x, y: s.y }))
+      this.cursorDur = dur / 1000
+    }
+    this.onCursorPath?.(this.cursorPath, this.cursorDur)
+    return this.cursorPath
+  }
+
+  /** Discard the recorded track (stops replay). */
+  clearCursorPath() {
+    this.cursorPath = []
+    this.cursorDur = 0
+    this.cursorReplay = false
+    this.onCursorPath?.(this.cursorPath, 0)
+  }
+
+  /** Sample the normalized track at phase ph∈[0,1] → [x, y] (linear between
+   * keyframes). */
+  _sampleCursor(ph) {
+    const track = this.cursorPath
+    let i = 1
+    while (i < track.length && track[i].t < ph) i += 1
+    const a = track[i - 1]
+    const b = track[Math.min(i, track.length - 1)]
+    const span = (b.t - a.t) || 1
+    const k = Math.min(1, Math.max(0, (ph - a.t) / span))
+    return [a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k]
   }
 
   _apply() {
@@ -284,15 +384,30 @@ export default class DistortionEngine {
   // The host passes dt=0 while paused — the trail pass is skipped then (unless
   // fresh pointer energy is queued) so the held frame doesn't decay to black,
   // but the display pass still runs so param edits repaint.
-  frame(dt) {
+  frame(dt, u) {
     if (!this.paused) this.time += dt * this.timeScale
+
+    // Cursor replay — steer the point along the recorded track, sampled by a
+    // normalized phase. Prefer the host's transport phase `u` (0..1, completes
+    // the gesture once per transport loop) when passed; otherwise loop the
+    // engine clock over the recorded duration. Wins over the auto path.
+    let replaying = false
+    if (this.cursorReplay && this.cursorPath.length >= 2) {
+      const ph = u != null
+        ? ((u % 1) + 1) % 1
+        : (this.cursorDur ? (((this.time % this.cursorDur) + this.cursorDur) % this.cursorDur) / this.cursorDur : 0)
+      const [x, y] = this._sampleCursor(ph)
+      this.target.set(x, y)
+      this.active = 1
+      replaying = true
+    }
 
     // Auto-drive: steer the point along the chosen path (pointer-free). Keeps
     // the stamp alive (active=1) so the trail feeds continuously.
-    const path = MOTION_PATHS[this.motion.shape]
+    const path = replaying ? null : MOTION_PATHS[this.motion.shape]
     if (path) {
-      const [u, v] = path(this.time * this.motion.speed, this.motion.size * 0.5)
-      this.target.set(u, v)
+      const [mx, my] = path(this.time * this.motion.speed, this.motion.size * 0.5)
+      this.target.set(mx, my)
       this.active = 1
     }
     // In-place pulse of the blob radius (0 = steady). Applied every frame so
@@ -331,6 +446,8 @@ export default class DistortionEngine {
   }
 
   dispose() {
+    if (this._onCanvasMove && this.canvas) this.canvas.removeEventListener('pointermove', this._onCanvasMove)
+    this._onCanvasMove = null
     if (this._raf) cancelAnimationFrame(this._raf)
     this._raf = null
     this.rtA.dispose()

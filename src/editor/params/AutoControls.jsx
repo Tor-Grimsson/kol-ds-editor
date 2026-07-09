@@ -1,7 +1,9 @@
-import { Fragment } from 'react'
-import { Slider, Dropdown, ViewToggle, LabeledControl, Textarea } from '@kolkrabbi/kol-component'
+import { Fragment, useEffect, useState } from 'react'
+import { Input, Dropdown, ViewToggle, LabeledControl, Textarea } from '@kolkrabbi/kol-component'
 import { visibleParams, isAnimatable, paramTab, paramSection } from './schema'
-import { isBinding } from './resolve'
+import { isBinding, resolveValue } from './resolve'
+import { useTransportCtx } from './transport'
+import { compileExpr } from './expr'
 import { ColorField } from '../compose/inspectors/ColorField'
 
 /**
@@ -60,6 +62,71 @@ export default function AutoControls({ schema, layer, setProp, palette, renderAn
   )
 }
 
+/* RangeField — the range control with DIRECT INPUT. One editable box does it
+ * all (TouchDesigner-style): type a NUMBER → constant; type an EXPRESSION like
+ * `sin(t)` → binds it to the expression source (shape it further in the
+ * Animation tab). While bound, the track is read-only and its thumb TRACKS the
+ * live resolved value every transport tick — so you see the modulation move —
+ * and the box shows the expression (editable) or the live value. Subscribes to
+ * the transport only when bound, so unbound params pay nothing. */
+function RangeField({ param: p, layer, setProp }) {
+  const raw = layer[p.key]
+  const bound = isBinding(raw)
+  const boundExpr = bound && raw.bind === 'mod' && raw.source === 'expr'
+  const ctx = useTransportCtx(bound)
+  const live = bound ? resolveValue(raw, ctx, layer) : raw
+  const numVal = typeof live === 'number' ? live : (p.default ?? 0)
+
+  const shown = boundExpr
+    ? (raw.transform?.expr ?? 'wave(t)')
+    : (p.format ? String(p.format(numVal)) : (p.step && p.step < 1 ? numVal.toFixed(2) : String(Math.round(numVal))))
+  const [draft, setDraft] = useState(shown)
+  const [editing, setEditing] = useState(false)
+  useEffect(() => { if (!editing) setDraft(shown) }, [shown, editing])
+
+  const commit = () => {
+    setEditing(false)
+    const s = draft.trim()
+    if (s === '') { setDraft(shown); return }
+    const n = Number(s)
+    if (Number.isFinite(n)) {                       /* a number → constant */
+      setProp(p.key, Math.max(p.min ?? n, Math.min(p.max ?? n, n)))
+      return
+    }
+    const compiled = compileExpr(s)                 /* else → expression binding */
+    if (!compiled.ok) { setDraft(shown); return }   /* won't compile → revert */
+    const range = (bound && raw.transform?.range) || (p.min != null && p.max != null ? [p.min, p.max] : [0, 1])
+    setProp(p.key, { bind: 'mod', source: 'expr', transform: { ...(bound ? raw.transform : {}), expr: s, range } })
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <input
+        type="range"
+        min={p.min} max={p.max} step={p.step ?? 1}
+        value={numVal}
+        disabled={bound}
+        onChange={(e) => setProp(p.key, Number(e.target.value))}
+        className="slider-black flex-1 w-full cursor-pointer"
+        style={bound ? { opacity: 0.7 } : undefined}
+      />
+      <Input
+        type="text" variant="filled" size="sm" chars={8}
+        value={draft}
+        title="Number sets a constant · an expression like sin(t) binds it"
+        onFocus={(e) => { setEditing(true); e.target.select() }}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur()
+          if (e.key === 'Escape') { setDraft(shown); setEditing(false); e.currentTarget.blur() }
+        }}
+        inputClassName="text-center"
+      />
+    </div>
+  )
+}
+
 function ParamControl({ param: p, layer, setProp, palette, bound, animate }) {
   const raw = layer[p.key]
   const value = raw === undefined ? p.default : raw
@@ -78,18 +145,10 @@ function ParamControl({ param: p, layer, setProp, palette, bound, animate }) {
 
   let control = null
   if (p.type === 'range') {
-    /* A bound (animated/modulated) prop is driven by the graph — show its
-     * live value read-only rather than let the slider fight the binding. */
-    control = bound
-      ? <div className="kol-helper-12 text-meta italic px-1">animated</div>
-      : (
-        <Slider
-          min={p.min} max={p.max} step={p.step ?? 1}
-          value={typeof value === 'number' ? value : (p.default ?? 0)}
-          formatValue={p.format}
-          onChange={(v) => setProp(p.key, v)}
-        />
-      )
+    /* Direct input + live modulation readout, both in one field (RangeField):
+     * type a number for a constant or an expression to bind it; a bound track
+     * shows the resolved value moving. */
+    control = <RangeField param={p} layer={layer} setProp={setProp} />
   } else if (p.type === 'select') {
     control = (
       <Dropdown

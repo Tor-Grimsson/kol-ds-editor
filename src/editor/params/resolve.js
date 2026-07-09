@@ -23,9 +23,17 @@ export function isBinding(v) {
 }
 
 /* Does a layer carry ANY binding? Lets the renderer skip per-frame work for
- * fully-static layers (the whole editor, today). */
+ * fully-static layers (the whole editor, today). Filter-chain stages keep
+ * their params NESTED (layer.filters[i].params) — scanned here so a bound
+ * effect knob animates like any flat prop. */
 export function hasBindings(layer) {
   for (const k in layer) if (isBinding(layer[k])) return true
+  if (Array.isArray(layer.filters)) {
+    for (const s of layer.filters) {
+      const ps = s?.params
+      if (ps) for (const k in ps) if (isBinding(ps[k])) return true
+    }
+  }
   return false
 }
 
@@ -37,11 +45,24 @@ export function resolveValue(value, ctx, layer) {
 }
 
 /* Resolve every binding on a layer to a flat concrete-value layer. Untouched
- * (returns the same object) when the layer has no bindings. */
+ * (returns the same object) when the layer has no bindings. Filter-chain
+ * stage params (nested) resolve too — untouched stages keep identity. */
 export function resolveLayer(layer, ctx) {
   if (!hasBindings(layer)) return layer
   const out = { ...layer }
   for (const k in layer) if (isBinding(layer[k])) out[k] = resolveValue(layer[k], ctx, layer)
+  if (Array.isArray(layer.filters)) {
+    out.filters = layer.filters.map((s) => {
+      const ps = s?.params
+      if (!ps) return s
+      let changed = false
+      const np = { ...ps }
+      for (const k in ps) {
+        if (isBinding(ps[k])) { np[k] = resolveValue(ps[k], ctx, layer); changed = true }
+      }
+      return changed ? { ...s, params: np } : s
+    })
+  }
   return out
 }
 
@@ -90,9 +111,27 @@ function lerpValue(a, b, k) {
 
 /* Per-binding smoothing state — EMA keyed on the binding OBJECT (bindings
  * persist in layer state until rewritten, so identity is the natural key;
- * a rewrite resets the smoother, which is correct). */
+ * a rewrite resets the smoother, which is correct). Live renders share this
+ * module-level store; a deterministic pass (webm bake) supplies its own via
+ * `ctx.smoothState` so its per-frame stepping neither inherits pre-bake live
+ * state nor advances the live EMAs. */
 const smoothState = new WeakMap()
 
+/* Fresh, private EMA store for a deterministic resolve pass — spread it into
+ * every ctx of that pass ({ ...transport.getCtx(), smoothState: ... }). The
+ * EMA steps once per resolve CALL, so the pass must resolve exactly once per
+ * frame. */
+export const makeSmoothingState = () => new WeakMap()
+
+/* Response shaping applied to every mod binding's normalized 0..1 signal, in a
+ * fixed order (each op is identity at its default, so pre-existing bindings are
+ * bit-unchanged): invert → smooth → curve → remap.
+ *   invert  flip the signal              (default off)
+ *   smooth  EMA temporal lag             (default 0 = raw; pre-existing)
+ *   curve   response exponent raw^curve  (default 1 = linear)
+ *   remap   spread 0..1 into transform.range = [lo, hi]  (default = param range)
+ * `range` IS the lo/hi output remap (labs' lo/hi ≡ our range); no separate
+ * lo/hi option to avoid a redundant second mapping. */
 function resolveMod(binding, ctx, layer) {
   const tr = binding.transform
   let raw = sampleSource(binding.source, ctx, { transform: tr, layer })   /* 0..1 */
@@ -100,10 +139,14 @@ function resolveMod(binding, ctx, layer) {
   /* smooth 0..1 → EMA follow factor (0 = raw, 0.95 = heavy lag). */
   const sm = tr?.smooth
   if (sm > 0) {
-    const prev = smoothState.get(binding)
+    const store = ctx?.smoothState ?? smoothState
+    const prev = store.get(binding)
     raw = prev == null ? raw : prev + (raw - prev) * (1 - Math.min(0.95, sm))
-    smoothState.set(binding, raw)
+    store.set(binding, raw)
   }
+  /* curve — response exponent on the (0..1) signal; 1 is linear/identity. */
+  const curve = tr?.curve
+  if (curve > 0 && curve !== 1) raw = Math.pow(raw < 0 ? 0 : raw, curve)
   const range = tr?.range
   if (range) return range[0] + (range[1] - range[0]) * raw
   return raw
@@ -117,6 +160,11 @@ if (import.meta.env?.DEV) {
   console.assert(resolveValue(track, { t: 0 }) === 0 && resolveValue(track, { t: 1 }) === 100, 'track endpoints')
   const mod = { bind: 'mod', source: 'mouseX', transform: { range: [0, 360] } }
   console.assert(resolveValue(mod, { mouse: { x: 0.5 } }) === 180, 'mod range map')
+  /* curve identity (default) vs an exponent — proves defaults are bit-unchanged. */
+  const modLin = { bind: 'mod', source: 'mouseX', transform: { range: [0, 1] } }
+  console.assert(resolveValue(modLin, { mouse: { x: 0.5 } }) === 0.5, 'no curve = identity')
+  const modCurve = { bind: 'mod', source: 'mouseX', transform: { range: [0, 1], curve: 2 } }
+  console.assert(Math.abs(resolveValue(modCurve, { mouse: { x: 0.5 } }) - 0.25) < 1e-9, 'curve exponent (0.5^2)')
   console.assert(!hasBindings({ x: 1, y: 2 }) && hasBindings({ x: track }), 'hasBindings')
   const rl = resolveLayer({ id: 'a', rotation: track }, { t: 0.5 })
   console.assert(rl.rotation === 50 && rl.id === 'a', 'resolveLayer resolves bindings, keeps rest')

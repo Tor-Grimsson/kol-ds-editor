@@ -1,4 +1,5 @@
-import { mulberry32 } from './rng.js'
+import { mulberry32 } from '../gl/rng.js'
+import { transport } from '../../editor/params/transport.js'
 
 // Thread Spinner (ported from kol-labs-single math/spinner: data/spinner.js +
 // engine.js, after polyhop's "Thread Spinner"). A dozen-ish balls each ride a
@@ -50,10 +51,12 @@ function ballPos(b, t, cx, cy, reach) {
 }
 
 // ── Module-level state (buffer + balls + sim time), keyed by structural sig.
+// The transport's reset epoch is part of the sig: stop/rewind bump it, so the
+// accumulated threads clear and the sim restarts fresh (labs stop semantics).
 const STATES = new Map()
 
 function getState(w, h, p) {
-  const sig = [p.count, p.drift, p.span, p.reach, p.seed, w | 0, h | 0].join('|')
+  const sig = [p.count, p.drift, p.span, p.reach, p.seed, w | 0, h | 0, transport.getEpoch()].join('|')
   let s = STATES.get(sig)
   if (s) return s
   const buf = document.createElement('canvas')

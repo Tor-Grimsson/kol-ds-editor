@@ -10,6 +10,9 @@ export const CanvasZoomContext = createContext(1)
 
 export const CANVAS_DEFAULTS = {
   bgColor:    '#0E0E11',
+  /* Type mode's default per-frame color (data value). NOT the frame-chrome
+   * default — unspecified guideColor now falls back to fg-ramp tokens in
+   * CanvasFrame so the border/label flip with the theme. */
   guideColor: '#F5F3EF',
 }
 
@@ -37,11 +40,23 @@ export function CanvasFrame({
   aspect,
   customRatio,
   bgColor,
-  guideColor = CANVAS_DEFAULTS.guideColor,
+  guideColor,
   children,
 }) {
   const { ratio, label } = resolveAspect(aspect, customRatio)
   const virtualH = CANVAS_VIRTUAL_W / ratio
+
+  /* Guide chrome (frame border + aspect label) rides the themed fg ramp by
+   * default — same treatment as the rulers (fg-16/48/64) — so it flips with
+   * light/dark instead of vanishing near-white on the light backdrop. An
+   * explicit `guideColor` (type mode's per-frame colors) keeps the fixed
+   * color-mix weights. */
+  const borderColor = guideColor
+    ? `color-mix(in srgb, ${guideColor} 24%, transparent)`
+    : 'var(--kol-fg-24)'
+  const labelColor = guideColor
+    ? `color-mix(in srgb, ${guideColor} 70%, transparent)`
+    : 'var(--kol-fg-64)'
 
   const rectRef = useRef(null)
   const [scale, setScale] = useState(0)
@@ -76,7 +91,7 @@ export function CanvasFrame({
         className="absolute inset-0 pointer-events-none z-[2]"
         style={{
           border:      '1px solid',
-          borderColor: `color-mix(in srgb, ${guideColor} 24%, transparent)`,
+          borderColor,
         }}
       />
       <span
@@ -88,7 +103,7 @@ export function CanvasFrame({
           fontSize:      10,
           fontFamily:    'var(--kol-font-family-mono)',
           letterSpacing: '0.1em',
-          color:         `color-mix(in srgb, ${guideColor} 70%, transparent)`,
+          color:         labelColor,
           pointerEvents: 'none',
         }}
       >
@@ -128,7 +143,7 @@ export default function Canvas({
   aspect,
   customRatio,
   bgColor,
-  guideColor = CANVAS_DEFAULTS.guideColor,
+  guideColor,
   align = 'center',
   panEnabled = false,
   showGrid = true,
@@ -136,18 +151,25 @@ export default function Canvas({
   guides,
   setGuides,
   guidesInteractive = true,
+  gutter = 48,
+  fit = 'contain',
   children,
 }) {
   const { ratio } = resolveAspect(aspect, customRatio)
 
+  /* fit='cover': the frame overflows the viewport instead of letterboxing —
+   * a display-side crop (the composition itself is untouched). */
   const letterbox = (
     <div
-      className={`flex ${align === 'start' ? 'items-start' : 'items-center'} justify-center w-full h-full`}
+      className={`flex ${align === 'start' ? 'items-start' : 'items-center'} justify-center w-full h-full ${fit === 'cover' ? 'overflow-hidden' : ''}`}
       style={{ containerType: 'size' }}
     >
       <div
+        className="shrink-0"
         style={{
-          width:       `min(calc(100cqw - 48px), calc((100cqh - 48px) * ${ratio}))`,
+          width: fit === 'cover'
+            ? `max(100cqw, calc(100cqh * ${ratio}))`
+            : `min(calc(100cqw - ${gutter}px), calc((100cqh - ${gutter}px) * ${ratio}))`,
         }}
       >
         <CanvasFrame
@@ -284,8 +306,9 @@ function PanZoomViewport({
         setDragging(false)
         dragStart.current = null
         /* No pan happened → this was a tap: play/pause (the "ultimate ruler"
-         * transport binding; labs parity). */
-        if (!spacePannedRef.current) transport.toggle()
+         * transport binding; labs parity). Same input guard as keydown so
+         * typing a space in a field doesn't toggle the transport. */
+        if (!spacePannedRef.current && !isInputTarget(e.target)) transport.toggle()
       }
     }
     window.addEventListener('keydown', onKeyDown)

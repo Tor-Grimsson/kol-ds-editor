@@ -3,6 +3,7 @@ import EditorIcon from '../../icons/EditorIcon'
 import { PopoverPanel, usePopover } from '@kolkrabbi/kol-component'
 import { TOOL_META, useTool } from '../../state/tools'
 import { useComposeState, COVER_TYPES, CANVAS_W, CANVAS_H } from '../../compose/state'
+import { findLayerDeep } from '../../compose/helpers'
 import { isBooleanable } from '../../compose/boolean-ops'
 
 /* Toolbar metrics — sized to the editor.kolkrabbi.io reference (roomy
@@ -231,7 +232,9 @@ export default function ToolPalette() {
     flipSelected, duplicateLayer, updateLayer, addLayer, booleanSelected,
   } = useComposeState()
 
-  const selectedLayer = layers.find((l) => l.id === selectedId) ?? null
+  /* Deep find — rotate/crop/duplicate resolve nested (group-child) layers,
+   * so the enabled-state must too; a top-level find would grey them out. */
+  const selectedLayer = selectedId && selectedId !== 'canvas' ? findLayerDeep(layers, selectedId) : null
   const hasSel   = selectedIds.some((id) => id !== 'canvas')
   const canXform = !!selectedLayer && !COVER_TYPES.includes(selectedLayer.type) && !selectedLayer.locked
   /* Booleans need ≥2 selected closed vector layers (paths / basic shapes). */
@@ -280,6 +283,7 @@ export default function ToolPalette() {
       <ShapeDropdown tool={tool} setTool={setTool} />
       <ToolButton id="pattern" active={tool === 'pattern'} onClick={() => setTool('pattern')} />
       <ToolButton id="zoom"    active={tool === 'zoom'}    onClick={() => setTool('zoom')} />
+      <ToolButton id="orbit"   active={tool === 'orbit'}   onClick={() => setTool('orbit')} />
 
       <Divider />
 
@@ -310,7 +314,7 @@ export default function ToolPalette() {
       <ActionButton
         icon="crop"
         label="Crop image"
-        disabled={selectedLayer?.type !== 'photo' || selectedLayer.srcType === 'video' || selectedLayer.locked}
+        disabled={selectedLayer?.type !== 'photo' || selectedLayer.locked}
         onClick={() => window.dispatchEvent(new CustomEvent('kol:enter-crop', { detail: selectedLayer.id }))}
       />
       <ActionButton

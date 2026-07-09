@@ -8,6 +8,7 @@ import { SwatchStack, EyedropPick } from './SwatchControls'
 import { HueStrip, SBSquare, WheelTriangle } from './SpectrumControls'
 import { useColorTarget } from './useColorTarget'
 import { useComposeState, resolveColor } from '../compose/state'
+import { useLayerEdit } from '../compose/useLayerEdit'
 import { findLayerDeep } from '../compose/helpers'
 import { pickFromCanvas } from './canvasEyedropper'
 
@@ -204,10 +205,14 @@ function SliderRow({ label, hint, max, value, onChange }) {
 }
 
 function OpacityRow() {
-  const { selectedId, layers, updateLayer, canvasFillOpacity, setCanvasFillOpacity } = useComposeState()
+  const { selectedId, layers, canvasFillOpacity, setCanvasFillOpacity } = useComposeState()
 
   const isCanvas = selectedId === 'canvas'
   const layer    = !isCanvas && selectedId ? findLayerDeep(layers, selectedId) : null
+
+  /* Coalesce like LayerInspector's opacity slider — a drag fires per tick,
+   * and each raw updateLayer would push its own undo entry. */
+  const edit = useLayerEdit(layer?.id ?? null, { history: 'coalesce' })
 
   /* Local fallback so dragging always moves the slider, even with no target. */
   const [localOpacity, setLocalOpacity] = useState(100)
@@ -221,7 +226,7 @@ function OpacityRow() {
   const onChange = isCanvas
     ? (v) => setCanvasFillOpacity(v / 100)
     : layer
-      ? (v) => updateLayer(layer.id, { opacity: v / 100 })
+      ? (v) => edit.setProp('opacity', v / 100)
       : setLocalOpacity
 
   return (

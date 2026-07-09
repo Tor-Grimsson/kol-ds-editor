@@ -48,6 +48,7 @@ export const SHORTCUTS = [
   { id: 'tool-rect',    combo: 'R', label: 'Rectangle tool',    section: 'Tools' },
   { id: 'tool-ellipse', combo: 'O', label: 'Ellipse tool',      section: 'Tools' },
   { id: 'tool-zoom',    combo: 'Z', label: 'Zoom tool',         section: 'Tools' },
+  { id: 'tool-orbit',   combo: 'C', label: 'Orbit tool (3D camera)', section: 'Tools' },
 
   /* View */
   { id: 'toggle-grid',  combo: 'G', label: 'Show/hide grid',    section: 'View' },

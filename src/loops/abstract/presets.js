@@ -49,6 +49,14 @@ const tinyCanvas = () => {
 /* ── Reaction-diffusion ─────────────────────────────────────────────── */
 const rdPool = makePool()
 
+/* Model family behind the layer's variation — gates the per-model reaction
+ * sliders (ranges from models.js `controls`; defaults = MODEL_DEFAULTS). */
+const rdModel = (l) => (variationById(l.variation) || RD_VARIATIONS[0]).model
+/* Reaction keys pushed into RDEngine.setParams each draw. NB the presets pin
+ * each variation's regime values; flipping the Variation select alone keeps
+ * the current slider values (labs reloaded them per pick). */
+const RD_PARAM_KEYS = ['feed', 'kill', 'a', 'b', 'f', 'eps']
+
 const rdLoop = {
   id: 'abstract-rd',
   label: 'Reaction-diffusion',
@@ -57,6 +65,14 @@ const rdLoop = {
   duration: 8,
   params: [
     { key: 'variation', label: 'Variation', type: 'select', default: 'coral', options: opts(RD_VARIATIONS) },
+    { key: 'feed', label: 'Feed', type: 'range', min: 0.01, max: 0.1, step: 0.001, default: 0.0545, when: (l) => rdModel(l) === 'gray-scott' },
+    { key: 'kill', label: 'Kill', type: 'range', min: 0.04, max: 0.08, step: 0.001, default: 0.062, when: (l) => rdModel(l) === 'gray-scott' },
+    { key: 'a', label: 'Feed A', type: 'range', min: 0.02, max: 0.2, step: 0.005, default: 0.1, when: (l) => rdModel(l) === 'schnakenberg' },
+    { key: 'b', label: 'Feed B', type: 'range', min: 0.4, max: 1.6, step: 0.02, default: 0.9, when: (l) => rdModel(l) === 'schnakenberg' },
+    /* oregonator has no variation yet (models.js: deferred) — these stay
+     * hidden until one lands, then light up with no further schema work */
+    { key: 'f', label: 'Stoichiometry', type: 'range', min: 0.6, max: 2.2, step: 0.05, default: 1.4, when: (l) => rdModel(l) === 'oregonator' },
+    { key: 'eps', label: 'Epsilon', type: 'range', min: 0.01, max: 0.08, step: 0.005, default: 0.02, when: (l) => rdModel(l) === 'oregonator' },
     { key: 'palette', label: 'Palette', type: 'select', default: 'jade', options: opts(RD_PALETTES) },
     { key: 'seed', label: 'Seed', type: 'select', default: 'scatter', options: opts(RD_SEEDS) },
     { key: 'speed', label: 'Speed', type: 'range', min: 0.2, max: 3, step: 0.1, default: 1 },
@@ -80,6 +96,10 @@ const rdLoop = {
     if (p.palette && cfg.palette !== p.palette) { engine.setPalette(p.palette); cfg.palette = p.palette }
     if (p.seed && cfg.seed !== p.seed) { engine.setSeed(p.seed); cfg.seed = p.seed }
     engine.setSpeed(p.speed ?? 1)
+    /* reaction sliders → the sim's live params (models ignore foreign keys) */
+    const rp = {}
+    for (const k of RD_PARAM_KEYS) if (p[k] != null) rp[k] = p[k]
+    engine.setParams(rp)
     /* u only advances while the transport plays — step exactly then, so the
      * sim pauses with the clock without importing editor code here. */
     if (u !== s.lastU) { engine.step(); s.lastU = u }
@@ -93,7 +113,9 @@ const RD_LOOP_PRESETS = RD_VARIATIONS.map((v) => ({
   label: v.label,
   loop: 'abstract-rd',
   sub: 'Reaction',
-  params: { variation: v.id, palette: v.palette ?? 'lava', seed: v.seed ?? 'scatter', speed: 1 },
+  /* ...v.params pins the regime (feed/kill etc.) so the exposed sliders land
+   * on each variation's Pearson values, not the schema defaults */
+  params: { variation: v.id, palette: v.palette ?? 'lava', seed: v.seed ?? 'scatter', speed: 1, ...v.params },
 }))
 
 /* ── Multi-scale Turing patterns ────────────────────────────────────── */
@@ -108,7 +130,11 @@ const mstpLoop = {
   params: [
     { key: 'scalePreset', label: 'Scales', type: 'select', default: 'classic', options: opts(MSTP_PRESETS) },
     { key: 'colors', label: 'Colors', type: 'select', default: 'candy', options: opts(MSTP_COLORS) },
-    { key: 'relief', label: 'Relief', type: 'range', min: 0, max: 6, step: 0.25, default: 3 },
+    /* engine colorMode: smooth height→palette vs per-pixel winning scale
+     * (labs SegmentedToggle values 'palette' | 'scale') */
+    { key: 'colorMode', label: 'Colour mode', type: 'select', default: 'palette',
+      options: [{ value: 'palette', label: 'Palette' }, { value: 'scale', label: 'By scale' }] },
+    { key: 'relief', label: 'Relief', type: 'range', min: 0, max: 8, step: 0.25, default: 3 },
     { key: 'speed', label: 'Speed', type: 'range', min: 0.2, max: 3, step: 0.1, default: 1 },
   ],
   draw(ctx, u, w, h, p) {
@@ -128,6 +154,7 @@ const mstpLoop = {
       cfg.scalePreset = p.scalePreset
     }
     if (cfg.colors !== p.colors) { engine.setColors(p.colors); cfg.colors = p.colors }
+    engine.setColorMode(p.colorMode || 'palette')
     engine.setRelief(p.relief ?? 3)
     engine.setSpeed(p.speed ?? 1)
     if (u !== s.lastU) { engine.step(); s.lastU = u }

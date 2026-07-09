@@ -3,6 +3,7 @@ import { glyphAnim } from './animations.js'
 import { featureString } from './features.js'
 import { fontByKey, vfString } from './fonts.js'
 import { buildMorphGlyphs, resolvedFont, ensureGlyphFont } from './morph.js'
+import { TAU, clamp01 } from '../loops/lib/util.js'
 
 /* KineticType — the SVG type composition engine, ported from kol-labs-single
  * src/pages/kinetic/engine/KineticType.js (Phase 10).
@@ -45,8 +46,6 @@ import { buildMorphGlyphs, resolvedFont, ensureGlyphFont } from './morph.js'
  *      renderAt(u) · dispose()
  */
 const NS = 'http://www.w3.org/2000/svg'
-const TAU = Math.PI * 2
-const clamp01 = (x) => Math.max(0, Math.min(1, x))
 const wrap01 = (x) => x - Math.floor(x)
 const el = (name) => document.createElementNS(NS, name)
 
@@ -101,6 +100,10 @@ export default class KineticType {
     svg.append(this.bg, this.layer, this.measEl)
     host.appendChild(svg)
     this.svg = svg
+    // Expose the engine on its host element so editor chrome (the kinetic
+    // element overlay) can hit-test/measure without threading refs through
+    // the layer renderer. Cleared in dispose().
+    host.__kolKineticEngine = this
 
     // Re-measure once real fonts finish loading (initial metrics may be
     // fallback). Flagged — renderAt drops the caches on the next frame.
@@ -127,7 +130,40 @@ export default class KineticType {
     this._render(clamp01(u))
   }
 
+  // Live bounding box of an instance's glyphs, in viewBox (= layer-local px)
+  // coords, including its position offset. Used by the on-canvas element
+  // overlay (selection frame / hit-test). Null until glyphs have rendered.
+  // (Ported from labs engine getInstanceRect.)
+  getInstanceRect(id) {
+    const rt = this._rt.get(id)
+    if (!rt || !rt.glyphG) return null
+    let bb
+    try { bb = rt.glyphG.getBBox() } catch { return null }
+    if (!bb || !bb.width || !bb.height) return null
+    const p = (this.params.instances || []).find((x) => x.id === id)
+    const ox = (p?.offset?.x || 0) * this.w
+    const oy = (p?.offset?.y || 0) * this.h
+    return { x: bb.x + ox, y: bb.y + oy, w: bb.width, h: bb.height }
+  }
+
+  // Which instance is under a screen point (topmost first) — click-to-select
+  // for the element overlay. Returns the instance id or null on empty canvas.
+  // (Ported from labs engine hitTest.)
+  hitTest(clientX, clientY) {
+    const rect = this.svg.getBoundingClientRect()
+    if (!rect.width || !rect.height) return null
+    const vx = (clientX - rect.left) * (this.w / rect.width)
+    const vy = (clientY - rect.top) * (this.h / rect.height)
+    const insts = this.params.instances || []
+    for (let i = insts.length - 1; i >= 0; i--) {
+      const r = this.getInstanceRect(insts[i].id)
+      if (r && vx >= r.x && vx <= r.x + r.w && vy >= r.y && vy <= r.y + r.h) return insts[i].id
+    }
+    return null
+  }
+
   dispose() {
+    if (this.host && this.host.__kolKineticEngine === this) delete this.host.__kolKineticEngine
     if (this.svg && this.svg.parentNode === this.host) this.host.removeChild(this.svg)
   }
 
